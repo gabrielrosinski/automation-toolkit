@@ -6,17 +6,10 @@ pipeline {
         IMAGE_NAME = 'localhost:5000/buged-php'
         IMAGE_TAG = "${BUILD_NUMBER}"
         K8S_NAMESPACE = 'default'
-        GIT_REPO = 'https://github.com/gabrielrosinski/automation-toolkit/tree/main/buged-php'
+        GIT_REPO = 'https://github.com/gabrielrosinski/automation-toolkit'
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                echo "Checking out code from ${GIT_REPO}"
-                git branch: 'main', url: env.GIT_REPO
-            }
-        }
-
         stage('PHP Syntax Check') {
             steps {
                 script {
