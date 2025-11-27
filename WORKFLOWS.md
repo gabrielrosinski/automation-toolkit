@@ -35,7 +35,18 @@ cd test-session-1
 # Fix bugs in your editor
 # Re-run until all pass
 
-# 3. Generate deployment files and optionally auto-deploy
+# 3. Copy Dockerfile (already included when using copy-for-practice.sh)
+# Dockerfile is automatically copied to practice directory
+# Review and edit if needed (usually no changes required)
+
+# 4. Test Docker build locally (before K8s deployment)
+eval $(minikube docker-env)
+docker build -t test-app:latest .
+docker run -d -p 8080:80 --name test-app test-app:latest
+curl http://localhost:8080  # Should see app output
+docker stop test-app && docker rm test-app
+
+# 5. Generate deployment files and optionally auto-deploy
 ../2-generate-project.sh
 # GitLab URL: http://test.local/test/app
 # GitLab username: testuser
@@ -49,23 +60,22 @@ cd test-session-1
 # Create Jenkins job? y (optional - auto-creates pipeline)
 
 # If you chose manual deployment:
-# eval $(minikube docker-env)
-# docker build -t test-app:latest .
+# (Already tested in step 4, just deploy to K8s)
 # kubectl apply -f k8s/
 
-# 4. Verify deployment
+# 6. Verify deployment
 kubectl get pods
 kubectl wait --for=condition=ready pod -l app=test-app --timeout=120s
 minikube service test-app --url
 
-# 5. Test application
+# 7. Test application
 curl $(minikube service test-app --url)
 
-# 6. Test Jenkins pipeline (if created)
+# 8. Test Jenkins pipeline (if created)
 # Open http://localhost:8080 (login: admin/admin)
 # Click on test-app-pipeline → Build Now
 
-# 7. Cleanup
+# 9. Cleanup
 kubectl delete -f k8s/
 cd ../..
 rm -rf buged-php/test-session-1
@@ -162,16 +172,47 @@ find . -name "*.php" | wc -l
 # Choose: 1) Run syntax check
 # Should show: ✓ All PHP files passed
 
-# 9. Test locally (optional, if time permits)
+# 9. Test locally with PHP dev server (optional, if time permits)
 php -S localhost:8000 &
 curl http://localhost:8000
 pkill -f "php -S"
+
+# 10. Copy Dockerfile to cloned repo
+cp ../lab-toolkit/Dockerfile ./
+# OR if you practiced with buged-php:
+cp ../lab-toolkit/buged-php/Dockerfile ./
+
+# What to edit in Dockerfile (USUALLY NOTHING!):
+# ✓ Already configured for standard PHP apps
+# ✓ PHP version: 8.1 (change if app needs different version)
+# ✓ PHP extensions: pdo_mysql, mbstring, exif, pcntl, bcmath, gd
+# ✓ Port: 80 (Apache default)
+# ✓ Health check: included
+#
+# Only edit if:
+# - App requires different PHP version (line 2: FROM php:X.X-apache)
+# - App needs additional PHP extensions (line 17: add to docker-php-ext-install)
+# - App uses different port (line 34: EXPOSE port)
+
+# 11. Build and test Docker image locally (IMPORTANT - verify before K8s deploy)
+eval $(minikube docker-env)  # Point to minikube's Docker
+docker build -t myapp:latest .
+# Wait for build to complete...
+
+# 12. Test the Docker container locally
+docker run -d -p 8080:80 --name test-app myapp:latest
+sleep 5
+curl http://localhost:8080
+# Should see your app's output!
+
+# 13. Stop test container
+docker stop test-app && docker rm test-app
 ```
 
 ### Phase 2: Containerize & Deploy (35-45 min) - **AUTOMATED!**
 
 ```bash
-# 10. Generate deployment files + AUTO-DEPLOY + AUTO-CREATE JENKINS JOB
+# 14. Generate deployment files + AUTO-DEPLOY + AUTO-CREATE JENKINS JOB
 ../2-generate-project.sh
 # Enter their details:
 # - GitLab URL: <from notes>
@@ -186,17 +227,16 @@ pkill -f "php -S"
 # - Create Jenkins job now? [Y/n]: y (AUTOMATED JENKINS SETUP!)
 
 # Review generated files (while deployment happens)
-cat Dockerfile
-cat Jenkinsfile
+cat Jenkinsfile  # Dockerfile already exists from step 10
 ls k8s/
 
-# 11. Verify automated deployment
+# 15. Verify automated deployment
 kubectl get pods
 kubectl get all
 minikube service <app-name> --url
 curl $(minikube service <app-name> --url)
 
-# 12. Verify Jenkins job was created
+# 16. Verify Jenkins job was created
 # Open http://localhost:8080 (login: admin/admin - PRE-CONFIGURED!)
 # Job "<app-name>-pipeline" should exist and be ready
 ```
@@ -204,29 +244,29 @@ curl $(minikube service <app-name> --url)
 ### Phase 3: Git & Test CI/CD (45-60 min) - **ALREADY CONFIGURED!**
 
 ```bash
-# 13. Commit to GitLab
+# 17. Commit to GitLab
 git add Dockerfile Jenkinsfile k8s/ .dockerignore .gitignore
 git commit -m "Add CI/CD pipeline and Kubernetes deployment"
 git push origin main
 
-# 14. Jenkins is ALREADY SET UP! (automated in Phase 2)
+# 18. Jenkins is ALREADY SET UP! (automated in Phase 2)
 # Open browser: http://localhost:8080
 # Login: admin / admin (PRE-CONFIGURED!)
 # Pipeline job "<app-name>-pipeline" already exists
 
-# 15. Test the CI/CD pipeline
+# 19. Test the CI/CD pipeline
 # Make a small test change
 echo "// Test CI/CD" >> index.php
 git add index.php
 git commit -m "Test CI/CD pipeline"
 git push origin main
 
-# 16. Trigger Jenkins build
+# 20. Trigger Jenkins build
 # Option A: Wait for auto-polling (5 minutes)
 # Option B: Click "Build Now" in Jenkins UI
 # Watch console output in Jenkins
 
-# 17. Verify full CI/CD workflow
+# 21. Verify full CI/CD workflow
 kubectl get pods -w  # Watch for new pod rollout
 kubectl describe deployment <app-name>
 minikube service <app-name> --url
@@ -236,12 +276,12 @@ curl $(minikube service <app-name> --url)  # Should see your change!
 ### Phase 4: Demo & Explain (60-90 min)
 
 ```bash
-# 18. Final verification
+# 22. Final verification
 kubectl get all
 kubectl logs -l app=<app-name>
 curl $(minikube service <app-name> --url)
 
-# 19. Show the complete automated workflow
+# 23. Show the complete automated workflow
 # Demonstrate: GitLab push → Jenkins auto-build → K8s auto-deploy
 ```
 

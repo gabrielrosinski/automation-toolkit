@@ -52,9 +52,10 @@ fi
 log_info "Copying buggy PHP files to '$TARGET_DIR'..."
 mkdir -p "$TARGET_DIR"
 
-# Copy only PHP files and README (not the solutions) from SCRIPT_DIR
+# Copy only PHP files, README, and Dockerfile (not the solutions) from SCRIPT_DIR
 cp "$SCRIPT_DIR"/*.php "$TARGET_DIR/" 2>/dev/null
 cp "$SCRIPT_DIR"/README.md "$TARGET_DIR/" 2>/dev/null
+cp "$SCRIPT_DIR"/Dockerfile "$TARGET_DIR/" 2>/dev/null
 
 log_success "Files copied to: $TARGET_DIR/"
 echo ""
