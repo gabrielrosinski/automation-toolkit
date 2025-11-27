@@ -18,7 +18,8 @@ pipeline {
                         set +e
                         ERROR_COUNT=0
 
-                        for file in $(find . -name "*.php" -not -path "./vendor/*"); do
+                        # Exclude vendor/ and buged-php/ (intentionally buggy template)
+                        for file in $(find . -name "*.php" -not -path "./vendor/*" -not -path "./buged-php/*"); do
                             if ! php -l "$file" 2>&1; then
                                 ERROR_COUNT=$((ERROR_COUNT + 1))
                             fi

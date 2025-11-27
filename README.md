@@ -143,6 +143,7 @@ lab-toolkit/
 ## Documentation
 
 - **[WORKFLOWS.md](WORKFLOWS.md)** - ⭐ **START HERE**: Testing & Interview step-by-step
+- **[INTERVIEW-QUESTIONS.md](INTERVIEW-QUESTIONS.md)** - 🎯 **CRITICAL**: What to ask the interviewer
 - **[docs/CHEATSHEET.md](docs/CHEATSHEET.md)** - All commands quick reference
 - **[docs/INTERVIEW-FLOW.md](docs/INTERVIEW-FLOW.md)** - Detailed 3-hour timeline
 - **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Common issues & solutions

@@ -17,6 +17,7 @@ pipeline {
                         set +e
                         ERROR_COUNT=0
 
+                        # Check all PHP files except vendor directory
                         for file in $(find . -name "*.php" -not -path "./vendor/*"); do
                             if ! php -l "$file" 2>&1; then
                                 ERROR_COUNT=$((ERROR_COUNT + 1))
