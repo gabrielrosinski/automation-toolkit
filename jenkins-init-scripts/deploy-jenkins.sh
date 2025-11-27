@@ -259,6 +259,23 @@ deploy_jenkins() {
         docker exec jenkins chown -R jenkins:jenkins /var/jenkins_home/.kube 2>/dev/null || true
         docker exec jenkins chown -R jenkins:jenkins /var/jenkins_home/.minikube 2>/dev/null || true
 
+        # Connect Jenkins to minikube network for direct access
+        log_info "Connecting Jenkins to minikube network..."
+        if docker network connect minikube jenkins 2>/dev/null; then
+            log_success "Jenkins connected to minikube network"
+        else
+            log_info "Jenkins already connected to minikube network"
+        fi
+
+        # Fix kubeconfig certificate paths (host paths → container paths)
+        log_info "Fixing kubeconfig certificate paths..."
+        docker exec jenkins sed -i "s|$HOME/.minikube|/var/jenkins_home/.minikube|g" /var/jenkins_home/.kube/config 2>/dev/null || true
+
+        # Update kubeconfig to use minikube IP instead of 127.0.0.1
+        MINIKUBE_IP=$(minikube ip 2>/dev/null || echo "192.168.49.2")
+        log_info "Updating kubeconfig to use minikube IP: $MINIKUBE_IP"
+        docker exec jenkins sed -i "s|https://127.0.0.1:[0-9]*|https://$MINIKUBE_IP:8443|g" /var/jenkins_home/.kube/config 2>/dev/null || true
+
         # Verify kubectl works
         if docker exec jenkins kubectl get nodes >/dev/null 2>&1; then
             log_success "kubectl configured and working"
