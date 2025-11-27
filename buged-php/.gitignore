@@ -1,0 +1,21 @@
+# Protect original buggy files from accidental fixes
+# If you want to commit fixed versions, do so in a different directory
+
+# Ignore common editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore backup files
+*.bak
+*.backup
+*-fixed.php
+
+# Ignore test databases
+*.db
+*.sqlite
+
+# Ignore vendor (if composer is used)
+vendor/
