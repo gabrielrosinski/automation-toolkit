@@ -48,109 +48,10 @@ detect_os() {
 }
 
 ################################################################################
-# GROOVY AUTOMATION SCRIPTS (COMMENTED OUT - CAUSING STARTUP FAILURES)
+# JENKINS AUTOMATION - Using external Groovy init scripts
 ################################################################################
-# These scripts were designed to automate Jenkins setup but cause reliability issues
-# Keeping them here for reference in case we want to debug/fix them later
-################################################################################
-
-# create_jenkins_init_scripts() {
-#     log_info "Creating Jenkins automation scripts..."
-#
-#     JENKINS_INIT_DIR="/tmp/jenkins-init-scripts"
-#     mkdir -p "$JENKINS_INIT_DIR"
-#
-#     # Script 1: Skip setup wizard and install plugins
-#     cat > "$JENKINS_INIT_DIR/01-install-plugins.groovy" << 'GROOVY_EOF'
-# import jenkins.model.Jenkins
-# import jenkins.install.InstallState
-#
-# def jenkins = Jenkins.getInstance()
-# jenkins.setInstallState(InstallState.INITIAL_SETUP_COMPLETED)
-#
-# println "=========================================="
-# println "Installing essential plugins..."
-# println "=========================================="
-#
-# def plugins = [
-#     'workflow-aggregator',
-#     'git',
-#     'credentials-binding',
-#     'docker-workflow',
-#     'pipeline-stage-view',
-#     'timestamper'
-# ]
-#
-# def pluginManager = jenkins.getPluginManager()
-# def updateCenter = jenkins.getUpdateCenter()
-# updateCenter.updateAllSites()
-#
-# def maxRetries = 30
-# def retries = 0
-# while (updateCenter.getSites().isEmpty() || updateCenter.getSite('default').availables.isEmpty()) {
-#     if (retries++ > maxRetries) {
-#         println "WARNING: Update center took too long to load"
-#         break
-#     }
-#     println "Waiting for update center... (${retries}/${maxRetries})"
-#     Thread.sleep(2000)
-# }
-#
-# def pluginsToInstall = []
-# plugins.each { pluginName ->
-#     if (!pluginManager.getPlugin(pluginName)) {
-#         def plugin = updateCenter.getPlugin(pluginName)
-#         if (plugin) {
-#             pluginsToInstall << plugin.deploy()
-#         }
-#     }
-# }
-#
-# if (!pluginsToInstall.isEmpty()) {
-#     pluginsToInstall.each { future -> future.get() }
-#     println "Plugin installation complete!"
-# }
-#
-# jenkins.save()
-# GROOVY_EOF
-#
-#     # Script 2: Create admin user
-#     cat > "$JENKINS_INIT_DIR/02-create-admin-user.groovy" << 'GROOVY_EOF'
-# import jenkins.model.Jenkins
-# import hudson.security.HudsonPrivateSecurityRealm
-# import hudson.security.FullControlOnceLoggedInAuthorizationStrategy
-#
-# def jenkins = Jenkins.getInstance()
-#
-# def hudsonRealm = new HudsonPrivateSecurityRealm(false)
-# hudsonRealm.createAccount('admin', 'admin')
-# jenkins.setSecurityRealm(hudsonRealm)
-#
-# def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
-# strategy.setAllowAnonymousRead(false)
-# jenkins.setAuthorizationStrategy(strategy)
-#
-# jenkins.save()
-#
-# println "Admin user created: admin/admin"
-# GROOVY_EOF
-#
-#     # Script 3: Configure executors
-#     cat > "$JENKINS_INIT_DIR/03-configure-executors.groovy" << 'GROOVY_EOF'
-# import jenkins.model.Jenkins
-#
-# def jenkins = Jenkins.getInstance()
-# jenkins.setNumExecutors(2)
-# jenkins.save()
-#
-# println "Jenkins configured with 2 executors"
-# GROOVY_EOF
-#
-#     log_success "Jenkins automation scripts created"
-# }
-
-################################################################################
-# SIMPLIFIED JENKINS DEPLOYMENT (NO GROOVY AUTOMATION)
+# Init scripts are stored in jenkins-init-scripts/ directory
+# They will be mounted into Jenkins container at startup
 ################################################################################
 
 deploy_jenkins() {
@@ -182,16 +83,29 @@ deploy_jenkins() {
         docker rm jenkins 2>/dev/null || true
     fi
 
-    log_info "Starting Jenkins container (vanilla - no automation)..."
+    # Get the directory containing this script
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    INIT_SCRIPTS_DIR="$SCRIPT_DIR/jenkins-init-scripts"
 
-    # Run vanilla Jenkins - NO init scripts, NO automation
+    # Verify init scripts exist
+    if [ ! -d "$INIT_SCRIPTS_DIR" ]; then
+        log_error "Jenkins init scripts not found at: $INIT_SCRIPTS_DIR"
+        return 1
+    fi
+
+    log_info "Starting Jenkins container with automation..."
+    log_info "Init scripts: $INIT_SCRIPTS_DIR"
+
+    # Run Jenkins with Groovy init scripts for full automation
     if ! docker run -d \
         --name jenkins \
         --restart unless-stopped \
         -p 0.0.0.0:8080:8080 \
         -p 0.0.0.0:50000:50000 \
+        -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" \
         -v jenkins_home:/var/jenkins_home \
         -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "$INIT_SCRIPTS_DIR":/usr/share/jenkins/ref/init.groovy.d:ro \
         jenkins/jenkins:lts; then
         log_error "Failed to start Jenkins container"
         log_info "Check if port 8080 is in use: sudo lsof -i :8080"
@@ -211,10 +125,12 @@ deploy_jenkins() {
         return 1
     fi
 
-    log_info "Waiting for Jenkins to initialize (30 seconds)..."
-    sleep 30
+    log_info "Waiting for Jenkins to initialize and install plugins..."
+    log_info "Installing: workflow-aggregator, git, credentials-binding, docker-workflow, pipeline-stage-view, timestamper"
+    log_info "This may take 2-3 minutes..."
+    sleep 45
 
-    # Verify container is still running after initialization
+    # Verify container is still running after plugin installation
     if ! docker ps | grep -q jenkins; then
         log_error "Jenkins container crashed during initialization!"
         log_info "Container logs:"
@@ -223,7 +139,7 @@ deploy_jenkins() {
         docker logs jenkins > /tmp/jenkins-init-crash.log 2>&1
         return 1
     fi
-    log_info "Jenkins container is still running after initialization"
+    log_info "Jenkins container is still running after plugin installation"
 
     # Install Docker CLI in Jenkins container
     log_info "Installing Docker CLI in Jenkins container..."
@@ -294,15 +210,20 @@ deploy_jenkins() {
         log_info "Run later: docker cp ~/.kube/config jenkins:/var/jenkins_home/.kube/config"
     fi
 
-    # Get initial admin password
-    log_info "Retrieving initial admin password..."
-    sleep 5
+    # Wait for plugin installation and user creation to complete
+    log_info "Waiting for automation scripts to complete..."
+    sleep 60
 
-    ADMIN_PASSWORD=""
-    for i in {1..10}; do
-        ADMIN_PASSWORD=$(docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword 2>/dev/null || echo "")
-        if [[ -n "$ADMIN_PASSWORD" ]]; then
+    # Verify Jenkins is ready
+    log_info "Verifying Jenkins is ready..."
+    for i in {1..20}; do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 2>/dev/null || echo "000")
+        if [[ "$HTTP_CODE" == "200" ]] || [[ "$HTTP_CODE" == "403" ]]; then
+            log_success "Jenkins is responding (HTTP $HTTP_CODE)"
             break
+        fi
+        if [[ $i -eq 20 ]]; then
+            log_warning "Jenkins may still be initializing..."
         fi
         sleep 3
     done
@@ -312,22 +233,36 @@ deploy_jenkins() {
     echo "=========================================="
     echo "Jenkins URL: http://localhost:8080"
     echo ""
-
-    if [[ -n "$ADMIN_PASSWORD" ]]; then
-        echo "Initial Admin Password:"
-        echo "  $ADMIN_PASSWORD"
-        echo ""
-        echo "Setup Instructions (5 minutes):"
-        echo "  1. Open http://localhost:8080"
-        echo "  2. Enter password above"
-        echo "  3. Click 'Install suggested plugins'"
-        echo "  4. Create your admin user"
-        echo "  5. Start using Jenkins!"
-    else
-        log_warning "Could not retrieve initial password"
-        echo "Run: docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword"
-    fi
-
+    echo "Auto-configured Credentials:"
+    echo "  Username: admin"
+    echo "  Password: admin"
+    echo ""
+    echo "Pre-installed Plugins:"
+    echo "  ✓ Pipeline (workflow-aggregator)"
+    echo "  ✓ Git"
+    echo "  ✓ Credentials Binding"
+    echo "  ✓ Docker Pipeline"
+    echo "  ✓ Pipeline Stage View"
+    echo "  ✓ Timestamper"
+    echo ""
+    echo "Configured Tools:"
+    echo "  ✓ Docker CLI"
+    echo "  ✓ kubectl"
+    echo "  ✓ 2 Executors"
+    echo ""
+    echo "Auto-created Pipeline Job:"
+    echo "  ✓ Job Name: php-app-pipeline"
+    echo "  ✓ Poll SCM: Every 2 minutes"
+    echo "  ✓ Source: Jenkinsfile from Git"
+    echo ""
+    echo "IMPORTANT - Configure the pipeline:"
+    echo "  1. Go to: http://localhost:8080/job/php-app-pipeline/configure"
+    echo "  2. Update 'Repository URL' with your GitLab URL"
+    echo "  3. Create credential 'gitlab-creds' (Manage Credentials)"
+    echo "  4. Select credential and Save"
+    echo "  5. Click 'Build Now' to test"
+    echo ""
+    echo "Jenkins is ready to use - no setup wizard needed!"
     echo "=========================================="
     echo ""
 

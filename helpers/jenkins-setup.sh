@@ -27,7 +27,7 @@ This guide will help you configure Jenkins to:
 3. Set up automated builds
 
 ==============================================
-STEP 1: ACCESS JENKINS (AUTOMATED)
+STEP 1: ACCESS JENKINS (FULLY AUTOMATED)
 ==============================================
 
 ✓ Jenkins is fully configured and ready to use!
@@ -35,11 +35,11 @@ STEP 1: ACCESS JENKINS (AUTOMATED)
 1. Open Jenkins in browser:
    URL: http://localhost:8080
 
-2. Login with auto-created credentials:
+2. Login with auto-configured credentials:
    Username: admin
    Password: admin
 
-3. Pre-installed plugins (auto-configured):
+3. Pre-installed plugins (via Groovy automation):
    ✓ Pipeline (workflow-aggregator)
    ✓ Git
    ✓ Credentials Binding
@@ -47,13 +47,15 @@ STEP 1: ACCESS JENKINS (AUTOMATED)
    ✓ Pipeline Stage View
    ✓ Timestamper
 
-4. Docker and kubectl already configured:
+4. Auto-configured tools:
    ✓ Docker CLI installed in Jenkins container
    ✓ kubectl installed in Jenkins container
    ✓ Docker socket mounted and accessible
    ✓ kubeconfig copied from host
+   ✓ 2 executors configured
 
-Note: Setup wizard was skipped - Jenkins is production-ready!
+Note: Setup wizard was skipped via Groovy init scripts
+      All automation scripts are in: jenkins-init-scripts/
 
 ==============================================
 STEP 2: ADD GITLAB CREDENTIALS
@@ -74,33 +76,27 @@ STEP 2: ADD GITLAB CREDENTIALS
 4. Click "Create"
 
 ==============================================
-STEP 3: CREATE PIPELINE JOB
+STEP 3: CONFIGURE AUTO-CREATED PIPELINE JOB
 ==============================================
 
-1. From Jenkins Dashboard, click "New Item"
+✓ Pipeline job 'php-app-pipeline' was auto-created during setup!
 
-2. Enter job name: php-app-pipeline
+1. Go to: http://localhost:8080/job/php-app-pipeline/configure
 
-3. Select "Pipeline" and click "OK"
+2. Update the Git configuration:
 
-4. In configuration page:
-
-   General Section:
-   □ Description: "PHP application CI/CD pipeline"
-   
-   Build Triggers:
-   □ Poll SCM (optional): H/5 * * * *
-     (checks GitLab every 5 minutes)
-   
-   Pipeline Section:
-   • Definition: "Pipeline script from SCM"
-   • SCM: Git
+   Repository Section:
    • Repository URL: [Your GitLab URL]
-   • Credentials: Select "gitlab-creds"
+     (Replace: https://gitlab.example.com/username/php-app.git)
+   • Credentials: Select "gitlab-creds" (created in Step 2)
    • Branch Specifier: */main (or */master)
-   • Script Path: Jenkinsfile
 
-5. Click "Save"
+   Note: Other settings are pre-configured:
+   ✓ Poll SCM: H/2 * * * * (every 2 minutes)
+   ✓ Pipeline from SCM: Jenkinsfile
+   ✓ Lightweight checkout: Enabled
+
+3. Click "Save"
 
 ==============================================
 STEP 4: RUN FIRST BUILD
