@@ -43,7 +43,7 @@ pipeline {
             steps {
                 script {
                     echo "Building Docker image in minikube Docker: ${IMAGE_NAME}:${IMAGE_TAG}"
-                    sh """
+                    sh """#!/bin/bash
                         # Source minikube Docker environment
                         if [ -f /var/jenkins_home/minikube-docker-env.sh ]; then
                             source /var/jenkins_home/minikube-docker-env.sh
