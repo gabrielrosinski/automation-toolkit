@@ -326,11 +326,38 @@ find . -name "*.php" -not -path "./vendor/*" -exec php -l {} \;
 
 ### Development Server
 ```bash
-# Start built-in server
+# Start built-in server (from project directory)
+cd test-practice
 php -S localhost:8000
+# Access: http://localhost:8000
+# Stop: Ctrl+C
 
-# Specify document root
-php -S localhost:8000 -t public/
+# Specify document root (from parent directory)
+php -S localhost:8000 -t test-practice/
+
+# Use different port
+php -S localhost:3000
+
+# Bind to all interfaces (allow external access)
+php -S 0.0.0.0:8000
+
+# With router script
+php -S localhost:8000 router.php
+```
+
+### Practice Workflow
+```bash
+# Copy buggy PHP for practice
+cd buged-php
+./copy-for-practice.sh
+cd ../test-practice
+
+# Debug
+../helpers/php-debug.sh
+
+# Fix bugs in editor, then test
+php -S localhost:8000
+# Open http://localhost:8000 in browser
 ```
 
 ### Debugging

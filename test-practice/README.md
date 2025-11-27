@@ -24,12 +24,7 @@ When debugging:
 ### For Testing
 
 ```bash
-# Option 1: Use the copy script (recommended)
-cd buged-php
-./copy-for-practice.sh
-cd ../test-practice
-
-# Option 2: Manual copy
+# Copy the buggy code to a test directory
 cp -r buged-php test-php-app
 cd test-php-app
 
@@ -37,32 +32,7 @@ cd test-php-app
 ../helpers/php-debug.sh
 
 # Fix the bugs manually in your editor
-```
-
-### Running the PHP Development Server
-
-After fixing the bugs, test your application:
-
-```bash
-# Navigate to your practice directory
-cd test-practice  # or your practice folder name
-
-# Start PHP built-in web server
-php -S localhost:8000
-
-# Server will output:
-# PHP 8.x Development Server (http://localhost:8000) started
-```
-
-**Access in browser:**
-- Main page: `http://localhost:8000/`
-- Direct file: `http://localhost:8000/index.php`
-
-**To stop the server:** Press `Ctrl+C`
-
-**Alternative:** Run from parent directory without cd:
-```bash
-php -S localhost:8000 -t test-practice/
+# Test your fixes with: php -S localhost:8000
 ```
 
 ### For Interview Practice
@@ -76,7 +46,6 @@ cd ~/interview-practice
 # Start debugging (time yourself!)
 php -l *.php
 # Fix bugs...
-# Test: php -S localhost:8000
 ```
 
 ## Application Description
