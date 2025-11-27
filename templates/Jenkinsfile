@@ -14,21 +14,27 @@ pipeline {
             steps {
                 script {
                     echo "Running PHP syntax check..."
-                    sh '''
+                    def result = sh(script: '''
+                        set +e
                         ERROR_COUNT=0
-                        find . -name "*.php" -not -path "./vendor/*" | while read file; do
-                            if ! php -l "$file"; then
+
+                        for file in $(find . -name "*.php" -not -path "./vendor/*"); do
+                            if ! php -l "$file" 2>&1; then
                                 ERROR_COUNT=$((ERROR_COUNT + 1))
                             fi
                         done
 
                         if [ $ERROR_COUNT -gt 0 ]; then
-                            echo "Found $ERROR_COUNT PHP syntax errors"
+                            echo "Found $ERROR_COUNT PHP syntax error(s)"
                             exit 1
                         fi
 
                         echo "All PHP files passed syntax check"
-                    '''
+                    ''', returnStatus: true)
+
+                    if (result != 0) {
+                        error("PHP syntax check failed")
+                    }
                 }
             }
         }
@@ -36,10 +42,22 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "Building Docker image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                    echo "Building Docker image in minikube Docker: ${IMAGE_NAME}:${IMAGE_TAG}"
                     sh """
+                        # Source minikube Docker environment
+                        if [ -f /var/jenkins_home/minikube-docker-env.sh ]; then
+                            source /var/jenkins_home/minikube-docker-env.sh
+                            echo "Using minikube Docker daemon: \$DOCKER_HOST"
+                        else
+                            echo "WARNING: minikube Docker env not found, using default Docker"
+                        fi
+
+                        # Build image in minikube's Docker
                         docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                         docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
+
+                        # Verify image exists
+                        docker images | grep ${IMAGE_NAME} || echo "WARNING: Image not found after build"
                     """
                 }
             }

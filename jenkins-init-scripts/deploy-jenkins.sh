@@ -163,16 +163,16 @@ deploy_jenkins() {
         log_warning "Jenkins took longer than expected to restart"
     fi
 
-    # Install Docker CLI in Jenkins container
-    log_info "Installing Docker CLI in Jenkins container..."
+    # Install Docker CLI and PHP in Jenkins container
+    log_info "Installing Docker CLI and PHP in Jenkins container..."
     if docker exec -u root jenkins bash -c "
         apt-get update -qq >/dev/null 2>&1 && \
-        apt-get install -y -qq curl >/dev/null 2>&1 && \
+        apt-get install -y -qq curl php-cli >/dev/null 2>&1 && \
         curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
     "; then
-        log_success "Docker CLI installed"
+        log_success "Docker CLI and PHP installed"
     else
-        log_warning "Docker CLI installation had issues (may still work)"
+        log_warning "Installation had issues (may still work)"
     fi
 
     # Configure Docker socket permissions
@@ -185,6 +185,8 @@ deploy_jenkins() {
         DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || echo "0")
     fi
 
+    log_info "Host Docker socket GID: $DOCKER_GID"
+
     # Create docker group in Jenkins with same GID
     docker exec -u root jenkins groupadd -g "$DOCKER_GID" docker 2>/dev/null || \
     docker exec -u root jenkins groupmod -g "$DOCKER_GID" docker 2>/dev/null || true
@@ -192,11 +194,34 @@ deploy_jenkins() {
     # Add jenkins user to docker group
     docker exec -u root jenkins usermod -aG docker jenkins || true
 
+    # Ensure jenkins user's groups are reloaded by restarting the container
+    # This is necessary for group membership to take effect
+    log_info "Restarting Jenkins to apply Docker group membership..."
+    docker restart jenkins >/dev/null 2>&1
+    sleep 15
+
+    # Wait for Jenkins to be ready after restart
+    local restart_attempts=30
+    local restart_attempt=0
+    log_info "Waiting for Jenkins to be ready after restart..."
+    while [ $restart_attempt -lt $restart_attempts ]; do
+        if curl -s http://localhost:8080/login | grep -q "Sign in" 2>/dev/null; then
+            log_success "Jenkins is ready after restart"
+            break
+        fi
+        echo -n "."
+        sleep 2
+        restart_attempt=$((restart_attempt + 1))
+    done
+
     # Verify Docker works in Jenkins
     if docker exec jenkins docker ps >/dev/null 2>&1; then
         log_success "Docker CLI configured in Jenkins"
     else
-        log_warning "Docker CLI may need manual verification"
+        log_error "Docker CLI verification failed"
+        log_info "Jenkins user groups: $(docker exec jenkins id jenkins)"
+        log_info "Docker socket permissions: $(ls -la /var/run/docker.sock)"
+        return 1
     fi
 
     # Install kubectl in Jenkins container
@@ -211,25 +236,69 @@ deploy_jenkins() {
         log_warning "kubectl installation had issues (may still work)"
     fi
 
-    # Copy kubeconfig to Jenkins
+    # Copy kubeconfig and minikube certificates to Jenkins
     log_info "Configuring kubectl access..."
     if [ -f ~/.kube/config ]; then
         docker exec jenkins mkdir -p /var/jenkins_home/.kube 2>/dev/null || true
+        docker exec jenkins mkdir -p /var/jenkins_home/.minikube 2>/dev/null || true
 
+        # Copy kubeconfig
         if docker cp ~/.kube/config jenkins:/var/jenkins_home/.kube/config 2>/dev/null; then
-            docker exec jenkins chown -R jenkins:jenkins /var/jenkins_home/.kube 2>/dev/null || true
             log_success "Kubeconfig copied to Jenkins"
+        fi
 
-            # Verify kubectl works
-            if docker exec jenkins kubectl get nodes >/dev/null 2>&1; then
-                log_success "kubectl configured and working"
-            fi
+        # Copy minikube certificates
+        if [ -d ~/.minikube ]; then
+            log_info "Copying minikube certificates..."
+            docker cp ~/.minikube/ca.crt jenkins:/var/jenkins_home/.minikube/ca.crt 2>/dev/null || true
+            docker cp ~/.minikube/profiles jenkins:/var/jenkins_home/.minikube/ 2>/dev/null || true
+            log_success "Minikube certificates copied"
+        fi
+
+        # Fix ownership
+        docker exec jenkins chown -R jenkins:jenkins /var/jenkins_home/.kube 2>/dev/null || true
+        docker exec jenkins chown -R jenkins:jenkins /var/jenkins_home/.minikube 2>/dev/null || true
+
+        # Verify kubectl works
+        if docker exec jenkins kubectl get nodes >/dev/null 2>&1; then
+            log_success "kubectl configured and working"
         else
-            log_warning "Failed to copy kubeconfig"
+            log_warning "kubectl verification failed - may need manual configuration"
         fi
     else
         log_warning "Kubeconfig not found at ~/.kube/config"
         log_info "Run later: docker cp ~/.kube/config jenkins:/var/jenkins_home/.kube/config"
+    fi
+
+    # Configure Jenkins to use minikube's Docker daemon
+    log_info "Configuring Jenkins to use minikube Docker daemon..."
+
+    # Get minikube docker-env variables
+    MINIKUBE_DOCKER_HOST=$(minikube docker-env | grep DOCKER_HOST | cut -d'=' -f2 | tr -d '"')
+    MINIKUBE_DOCKER_CERT_PATH=$(minikube docker-env | grep DOCKER_CERT_PATH | cut -d'=' -f2 | tr -d '"')
+
+    if [ -n "$MINIKUBE_DOCKER_HOST" ] && [ -n "$MINIKUBE_DOCKER_CERT_PATH" ]; then
+        log_info "Minikube Docker host: $MINIKUBE_DOCKER_HOST"
+
+        # Copy minikube Docker certificates to Jenkins
+        docker exec jenkins mkdir -p /var/jenkins_home/.minikube-docker 2>/dev/null || true
+        docker cp "$MINIKUBE_DOCKER_CERT_PATH/." jenkins:/var/jenkins_home/.minikube-docker/ 2>/dev/null || true
+        docker exec jenkins chown -R jenkins:jenkins /var/jenkins_home/.minikube-docker 2>/dev/null || true
+
+        # Create environment file for Jenkins to source
+        docker exec jenkins bash -c "cat > /var/jenkins_home/minikube-docker-env.sh <<EOF
+export DOCKER_TLS_VERIFY=1
+export DOCKER_HOST=$MINIKUBE_DOCKER_HOST
+export DOCKER_CERT_PATH=/var/jenkins_home/.minikube-docker
+export MINIKUBE_ACTIVE_DOCKERD=minikube
+EOF"
+
+        docker exec jenkins chown jenkins:jenkins /var/jenkins_home/minikube-docker-env.sh
+
+        log_success "Minikube Docker environment configured"
+        log_info "Jenkins can now build images in minikube's Docker"
+    else
+        log_warning "Could not get minikube docker-env - images may build in wrong Docker"
     fi
 
     # Wait for plugin installation and user creation to complete
