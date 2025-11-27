@@ -295,17 +295,24 @@ deploy_jenkins() {
     MINIKUBE_DOCKER_CERT_PATH=$(minikube docker-env | grep DOCKER_CERT_PATH | cut -d'=' -f2 | tr -d '"')
 
     if [ -n "$MINIKUBE_DOCKER_HOST" ] && [ -n "$MINIKUBE_DOCKER_CERT_PATH" ]; then
-        log_info "Minikube Docker host: $MINIKUBE_DOCKER_HOST"
+        # Get minikube container IP (Jenkins container can't reach 127.0.0.1)
+        MINIKUBE_CONTAINER_IP=$(docker inspect minikube --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || echo "192.168.49.2")
+
+        # Replace 127.0.0.1 with minikube container IP for Jenkins access
+        JENKINS_DOCKER_HOST="tcp://${MINIKUBE_CONTAINER_IP}:2376"
+
+        log_info "Minikube Docker host (from host): $MINIKUBE_DOCKER_HOST"
+        log_info "Minikube Docker host (for Jenkins): $JENKINS_DOCKER_HOST"
 
         # Copy minikube Docker certificates to Jenkins
         docker exec jenkins mkdir -p /var/jenkins_home/.minikube-docker 2>/dev/null || true
         docker cp "$MINIKUBE_DOCKER_CERT_PATH/." jenkins:/var/jenkins_home/.minikube-docker/ 2>/dev/null || true
         docker exec jenkins chown -R jenkins:jenkins /var/jenkins_home/.minikube-docker 2>/dev/null || true
 
-        # Create environment file for Jenkins to source
+        # Create environment file for Jenkins to source (using container IP)
         docker exec jenkins bash -c "cat > /var/jenkins_home/minikube-docker-env.sh <<EOF
 export DOCKER_TLS_VERIFY=1
-export DOCKER_HOST=$MINIKUBE_DOCKER_HOST
+export DOCKER_HOST=$JENKINS_DOCKER_HOST
 export DOCKER_CERT_PATH=/var/jenkins_home/.minikube-docker
 export MINIKUBE_ACTIVE_DOCKERD=minikube
 EOF"
