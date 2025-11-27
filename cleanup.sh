@@ -36,6 +36,15 @@ echo "  • Base images (jenkins/jenkins:lts, php:*, etc.)"
 echo ""
 log_info "Starting cleanup..."
 
+# 0. Reset Docker environment (in case minikube docker-env is active)
+log_info "Resetting Docker environment to host..."
+unset DOCKER_TLS_VERIFY
+unset DOCKER_HOST
+unset DOCKER_CERT_PATH
+unset MINIKUBE_ACTIVE_DOCKERD
+log_success "Docker environment reset to host"
+echo ""
+
 # 1. Stop and remove Jenkins container
 log_info "Cleaning up Jenkins..."
 if docker ps -a | grep -q jenkins; then
