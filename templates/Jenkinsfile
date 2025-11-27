@@ -10,13 +10,6 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
-            steps {
-                echo "Checking out code from ${GIT_REPO}"
-                git branch: '{{GIT_BRANCH}}', url: env.GIT_REPO
-            }
-        }
-
         stage('PHP Syntax Check') {
             steps {
                 script {
