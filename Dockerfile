@@ -23,7 +23,8 @@ RUN a2enmod rewrite
 WORKDIR /var/www/html
 
 # Copy application code
-# Note: Update this path to point to your actual PHP files location
+# This is interview-ready: assumes PHP files are in repo root
+# For toolkit testing, Jenkinsfile builds from test-practice/ directory
 COPY . /var/www/html/
 
 # Set permissions

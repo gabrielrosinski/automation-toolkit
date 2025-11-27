@@ -399,6 +399,39 @@ docker ps  # Verify running
 # If still fails, check Docker Desktop WSL integration in Windows
 ```
 
+### Stale Docker Image :latest Tag (FIXED)
+**Problem:** Pods fail health checks (403/500) even after successful Docker build. Kubernetes uses old image with `:latest` tag.
+
+**Root Cause:** When rebuilding images in minikube's Docker, old `:latest` tags persist and point to broken images. Kubernetes pulls the old image.
+
+**Permanent Fix Applied:**
+1. **Jenkinsfile** (lines 59-60): Automatically removes old `:latest` tag before each build
+   ```groovy
+   docker rmi ${IMAGE_NAME}:latest 2>/dev/null || echo "No old :latest tag found"
+   ```
+2. **cleanup.sh** (lines 113-131): Cleans images from **both** host Docker and minikube Docker
+   ```bash
+   # Switches to minikube Docker context and removes all toolkit images
+   eval $(minikube docker-env)
+   docker rmi -f localhost:5000/automation-toolkit:*
+   ```
+
+**Manual Fix (if needed):**
+```bash
+# Remove stale images from minikube Docker
+bash -c 'eval $(minikube docker-env) && docker images | grep automation-toolkit'
+bash -c 'eval $(minikube docker-env) && docker rmi -f localhost:5000/automation-toolkit:latest'
+
+# Rebuild and retag
+bash -c 'eval $(minikube docker-env) && docker build -t localhost:5000/app:3 .'
+bash -c 'eval $(minikube docker-env) && docker tag localhost:5000/app:3 localhost:5000/app:latest'
+
+# Force pod recreation
+kubectl delete pod <pod-name> -n <namespace>
+```
+
+**Prevention:** Run `./cleanup.sh` before each test cycle to ensure clean Docker environment.
+
 ## Documentation Files
 
 - **README.md** - Overview, quick start, what gets installed

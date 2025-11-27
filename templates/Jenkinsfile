@@ -53,6 +53,10 @@ pipeline {
                         fi
 
                         # Build image in minikube's Docker
+                        # Remove old :latest tag to prevent stale image issues
+                        docker rmi ${IMAGE_NAME}:latest 2>/dev/null || echo "No old :latest tag found"
+
+                        # Build new image
                         docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                         docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
 

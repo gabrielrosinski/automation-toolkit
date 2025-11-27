@@ -96,19 +96,38 @@ else
     log_info "minikube not installed (skipping)"
 fi
 
-# 4. Remove toolkit-generated Docker images
+# 4. Remove toolkit-generated Docker images (from both host and minikube Docker)
 log_info "Cleaning up Docker images..."
 
-# Find and remove images that match common app patterns
-# (localhost:5000/*, or images tagged as test apps)
-IMAGES_TO_REMOVE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "localhost:5000/|test-|php-app|demo-" || true)
+# Clean up images from HOST Docker
+IMAGES_TO_REMOVE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "localhost:5000/|automation-toolkit|test-|php-app|demo-" || true)
 
 if [ -n "$IMAGES_TO_REMOVE" ]; then
-    log_info "Removing toolkit-generated images..."
+    log_info "Removing toolkit-generated images from host Docker..."
     echo "$IMAGES_TO_REMOVE" | xargs -r docker rmi -f 2>/dev/null || true
-    log_success "Toolkit images removed"
+    log_success "Host Docker images removed"
 else
-    log_info "No toolkit-generated images found"
+    log_info "No toolkit-generated images found in host Docker"
+fi
+
+# Clean up images from MINIKUBE Docker (if minikube exists)
+if command -v minikube >/dev/null 2>&1 && minikube status >/dev/null 2>&1; then
+    log_info "Cleaning up images from minikube Docker..."
+
+    # Switch to minikube Docker context and remove images
+    eval $(minikube docker-env) 2>/dev/null || true
+    MINIKUBE_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "localhost:5000/|automation-toolkit" || true)
+
+    if [ -n "$MINIKUBE_IMAGES" ]; then
+        log_info "Removing toolkit images from minikube Docker..."
+        echo "$MINIKUBE_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
+        log_success "Minikube Docker images removed"
+    else
+        log_info "No toolkit images found in minikube Docker"
+    fi
+
+    # Reset to host Docker context
+    eval $(minikube docker-env -u) 2>/dev/null || true
 fi
 
 # 5. Docker system prune (dangling images, stopped containers, unused networks)

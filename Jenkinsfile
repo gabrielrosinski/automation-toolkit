@@ -6,7 +6,7 @@ pipeline {
         IMAGE_NAME = 'localhost:5000/automation-toolkit'
         IMAGE_TAG = "${BUILD_NUMBER}"
         K8S_NAMESPACE = 'default'
-        GIT_REPO = 'https://github.com/gabrielrosinski/automation-toolkit/'
+        GIT_REPO = 'https://github.com/gabrielrosinski/automation-toolkit'
     }
 
     stages {
@@ -18,8 +18,7 @@ pipeline {
                         set +e
                         ERROR_COUNT=0
 
-                        # Exclude vendor/ and buged-php/ (intentionally buggy template)
-                        for file in $(find . -name "*.php" -not -path "./vendor/*" -not -path "./buged-php/*"); do
+                        for file in $(find . -name "*.php" -not -path "./vendor/*"); do
                             if ! php -l "$file" 2>&1; then
                                 ERROR_COUNT=$((ERROR_COUNT + 1))
                             fi
@@ -54,7 +53,14 @@ pipeline {
                         fi
 
                         # Build image in minikube's Docker
-                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                        # For toolkit testing: build from test-practice/ directory (PHP files are there)
+                        # For interview: the interviewer's repo will have PHP files at root
+
+                        # Remove old :latest tag to prevent stale image issues
+                        docker rmi ${IMAGE_NAME}:latest 2>/dev/null || echo "No old :latest tag found"
+
+                        # Build new image
+                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile test-practice/
                         docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
 
                         # Verify image exists
