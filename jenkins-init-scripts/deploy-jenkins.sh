@@ -83,12 +83,12 @@ deploy_jenkins() {
         docker rm jenkins 2>/dev/null || true
     fi
 
-    # Get the directory containing this script
+    # Get the directory containing this script (which is now jenkins-init-scripts/)
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    INIT_SCRIPTS_DIR="$SCRIPT_DIR/jenkins-init-scripts"
+    INIT_SCRIPTS_DIR="$SCRIPT_DIR"
 
     # Verify init scripts exist
-    if [ ! -d "$INIT_SCRIPTS_DIR" ]; then
+    if [ ! -f "$INIT_SCRIPTS_DIR/01-install-plugins.groovy" ]; then
         log_error "Jenkins init scripts not found at: $INIT_SCRIPTS_DIR"
         return 1
     fi
@@ -140,6 +140,28 @@ deploy_jenkins() {
         return 1
     fi
     log_info "Jenkins container is still running after plugin installation"
+
+    # Wait for Jenkins to restart (plugins trigger auto-restart)
+    log_info "Waiting for Jenkins to restart and load plugins..."
+    sleep 30
+
+    # Wait for Jenkins to be fully ready after restart
+    local max_attempts=30
+    local attempt=0
+    log_info "Waiting for Jenkins to be ready after restart..."
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -s http://localhost:8080/login | grep -q "Sign in" 2>/dev/null; then
+            log_success "Jenkins is ready after restart"
+            break
+        fi
+        echo -n "."
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    if [ $attempt -eq $max_attempts ]; then
+        log_warning "Jenkins took longer than expected to restart"
+    fi
 
     # Install Docker CLI in Jenkins container
     log_info "Installing Docker CLI in Jenkins container..."
@@ -250,17 +272,9 @@ deploy_jenkins() {
     echo "  ✓ kubectl"
     echo "  ✓ 2 Executors"
     echo ""
-    echo "Auto-created Pipeline Job:"
-    echo "  ✓ Job Name: php-app-pipeline"
-    echo "  ✓ Poll SCM: Every 2 minutes"
-    echo "  ✓ Source: Jenkinsfile from Git"
-    echo ""
-    echo "IMPORTANT - Configure the pipeline:"
-    echo "  1. Go to: http://localhost:8080/job/php-app-pipeline/configure"
-    echo "  2. Update 'Repository URL' with your GitLab URL"
-    echo "  3. Create credential 'gitlab-creds' (Manage Credentials)"
-    echo "  4. Select credential and Save"
-    echo "  5. Click 'Build Now' to test"
+    echo "Pipeline Job Setup:"
+    echo "  After running ./2-generate-project.sh, you can auto-create the pipeline job"
+    echo "  Or create it manually at: http://localhost:8080/newJob"
     echo ""
     echo "Jenkins is ready to use - no setup wizard needed!"
     echo "=========================================="

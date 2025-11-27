@@ -19,6 +19,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Time constraint: 2-3 hours maximum
 - Designed for simplicity over production features
 
+**Recent Improvements:**
+- ✅ Template-based file generation (replaces inline heredocs)
+- ✅ Jenkins automation fully separated into `jenkins-init-scripts/`
+- ✅ Single responsibility: Jenkins setup vs pipeline job creation split
+- ✅ Docker environment properly isolated (Jenkins in host, apps in minikube)
+- ✅ Maintainable `{{PLACEHOLDER}}` syntax instead of `_PLACEHOLDER` tokens
+
 ## Core Architecture
 
 ### Two-Script Automation System
@@ -35,47 +42,66 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Output:** `.env.interview` file with minikube IP, Jenkins URL, Docker host info
 
 **2. Project Generator (`2-generate-project.sh`)**
-- **Purpose:** Interactive template generator for deployment files (~2 minutes)
-- **User Prompts:** GitLab URL, PHP version (7.4/8.0/8.1/8.2), app port, app name, K8s namespace
+- **Purpose:** Interactive template processor for deployment files (~2 minutes)
+- **User Prompts:** GitLab URL, PHP version (7.4/8.0/8.1/8.2/8.3), app port, app name, K8s namespace
 - **Generates:** Dockerfile, Jenkinsfile, K8s manifests, quick-deploy.sh, .dockerignore
 - **Key Implementation:**
-  - Uses heredocs for embedding complete file templates
+  - Uses template files from `templates/` directory with `{{PLACEHOLDER}}` tokens
+  - `process_template()` function copies template and replaces all placeholders
   - Cross-platform `sed_inplace()` function (handles macOS BSD sed vs Linux GNU sed)
-  - Jenkinsfile uses placeholder tokens (`APP_NAME_PLACEHOLDER`, etc.) replaced via sed
-  - All generated files include best practices (health checks, resource limits, proper labels)
+  - Template structure: `templates/docker/`, `templates/kubernetes/`, `templates/Jenkinsfile`
+  - All templates include best practices (health checks, resource limits, proper labels)
+
+### Jenkins Automation (`jenkins-init-scripts/`)
+
+**jenkins-init-scripts/deploy-jenkins.sh** - Jenkins container deployment with full automation
+**jenkins-init-scripts/01-install-plugins.groovy** - Auto-installs essential plugins on startup
+**jenkins-init-scripts/02-create-admin-user.groovy** - Creates admin/admin user automatically
+**jenkins-init-scripts/03-configure-executors.groovy** - Sets executor count to 2
 
 ### Helper Scripts (Support Tools - `helpers/`)
 
 **helpers/php-debug.sh** - PHP debugging assistant
-**helpers/jenkins-setup.sh** - Step-by-step Jenkins configuration guide
+**helpers/create-jenkins-job.sh** - Creates Jenkins pipeline job via Script Console API
 **helpers/k8s-helpers.sh** - kubectl command reference + diagnostics
 
-## Generated Files Architecture
+## Template Files Architecture
 
-### Dockerfile Template
-- Multi-stage build pattern with `FROM php:${PHP_VERSION}-apache`
+All deployment files are generated from templates in `templates/` directory using placeholder substitution.
+
+### Dockerfile Template (`templates/docker/Dockerfile`)
+- Multi-stage build pattern with `FROM php:{{PHP_VERSION}}-apache`
 - Installs common PHP extensions: pdo_mysql, mbstring, exif, pcntl, bcmath, gd
 - Enables Apache mod_rewrite
-- Includes HEALTHCHECK directive
+- Includes HEALTHCHECK directive on port `{{APP_PORT}}`
 - Sets proper permissions (www-data:www-data)
+- Placeholders: `{{PHP_VERSION}}`, `{{APP_PORT}}`
 
-### Jenkinsfile Pipeline
+### Jenkinsfile Template (`templates/Jenkinsfile`)
 - **6 Stages:** Checkout → PHP Syntax Check → Build → Push → Deploy → Verify
-- **Environment Variables:** DOCKER_REGISTRY, IMAGE_NAME, IMAGE_TAG, GIT_REPO, K8S_NAMESPACE
+- **Environment Variables:** APP_NAME, IMAGE_NAME, IMAGE_TAG, GIT_REPO, K8S_NAMESPACE
 - **PHP Syntax Check Stage:** Finds all `*.php` files (excluding vendor/), runs `php -l` on each
 - **Build Stage:** Builds Docker image with `${BUILD_NUMBER}` tag + latest tag
 - **Deploy Stage:** Uses `kubectl set image` (updates existing) OR `kubectl apply -f k8s/` (creates new)
 - **Post Actions:** Success shows service URL, failure shows debug info, always cleans up with `docker system prune`
+- Placeholders: `{{APP_NAME}}`, `{{IMAGE_NAME}}`, `{{GIT_REPO}}`, `{{GIT_BRANCH}}`, `{{K8S_NAMESPACE}}`
 
-### Kubernetes Manifests
-- **deployment.yaml:** Includes liveness/readiness probes, resource requests/limits, proper labels
+### Kubernetes Manifest Templates (`templates/kubernetes/`)
+- **deployment.yaml:** Includes liveness/readiness/startup probes, resource requests/limits, security context, proper labels
+  - Placeholders: `{{APP_NAME}}`, `{{IMAGE_NAME}}`, `{{K8S_NAMESPACE}}`, `{{APP_PORT}}`, `{{HEALTH_CHECK_PATH}}`
 - **service.yaml:** Type NodePort (accessible via minikube service URL)
+  - Placeholders: `{{APP_NAME}}`, `{{K8S_NAMESPACE}}`, `{{APP_PORT}}`
 - **namespace.yaml:** Only generated if namespace != "default"
+  - Placeholders: `{{K8S_NAMESPACE}}`
 - **ImagePullPolicy:** Set to `IfNotPresent` (works with minikube's Docker daemon)
 
-### quick-deploy.sh
-- Fast local deployment helper
+### Docker Ignore Template (`templates/docker/.dockerignore`)
+- Excludes .git, k8s/, .env files, documentation from Docker build context
+
+### Generated Helper Script (quick-deploy.sh)
+- Fast local deployment script (generated, not templated)
 - Switches to minikube Docker, builds image, applies manifests, waits for rollout
+- Custom-generated with app-specific values
 
 ## Key Technical Patterns
 
@@ -93,6 +119,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Jenkins Configuration
 - **Fully Automated Setup:** No manual setup wizard - ready to use immediately
 - **Credentials:** Username `admin`, Password `admin` (auto-created)
+- **Deployment Script:** `jenkins-init-scripts/deploy-jenkins.sh` handles full Jenkins deployment
 - **Auto-Installed Plugins:**
   - `workflow-aggregator` - Pipeline support
   - `git` - GitLab checkout
@@ -100,10 +127,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `docker-workflow` - Docker integration
   - `pipeline-stage-view` - Better UI
   - `timestamper` - Logs with timestamps
-- **Groovy Init Scripts:** 3 scripts auto-configure Jenkins on first boot
+- **Groovy Init Scripts:** 3 scripts in `jenkins-init-scripts/` auto-configure Jenkins on first boot
   - `01-install-plugins.groovy` - Installs all plugins, skips setup wizard
   - `02-create-admin-user.groovy` - Creates admin/admin user, configures security
   - `03-configure-executors.groovy` - Sets executor count to 2
+- **Pipeline Job Creation:** `helpers/create-jenkins-job.sh` creates jobs via Script Console API (runs after project generation)
 - **Docker Access:** Runs in Docker with volume mounts: `jenkins_home` + `/var/run/docker.sock`
 - Docker CLI installed inside Jenkins container (using `get.docker.com`)
 - kubectl installed inside Jenkins container (latest stable release)
@@ -115,6 +143,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Registry addon enabled (local registry at `localhost:5000`)
 - Ingress addon enabled (optional, for exposing services)
 - Local Docker daemon used via `eval $(minikube docker-env)`
+
+### Docker Environment Switching
+The infrastructure setup follows this critical sequence:
+1. **Deploy Jenkins in host Docker** - `deploy-jenkins.sh` runs before `eval $(minikube docker-env)`
+2. **Validate Jenkins** - Ensures Jenkins container is running in host Docker context
+3. **Switch to minikube Docker** - After Jenkins validation, runs `eval $(minikube docker-env)`
+4. **App builds use minikube** - All subsequent `docker build` commands create images in minikube's registry
+5. **Jenkins accesses both** - Jenkins container stays in host Docker but can build to minikube via mounted socket
+
+This architecture ensures:
+- Jenkins container persists across minikube restarts
+- Faster Jenkins startup (no K8s overhead)
+- Images built by Jenkins are immediately available to K8s pods
+- No need to push images to external registry
 
 ## Common Development Commands
 
@@ -157,6 +199,26 @@ docker exec jenkins docker ps  # Test Docker access
 docker exec jenkins kubectl get nodes  # Test kubectl access
 ```
 
+### Working with Templates
+```bash
+# View all template files
+find templates/ -type f
+
+# Test template processing manually
+cp templates/docker/Dockerfile /tmp/test-Dockerfile
+sed -i 's|{{PHP_VERSION}}|8.1|g' /tmp/test-Dockerfile
+sed -i 's|{{APP_PORT}}|80|g' /tmp/test-Dockerfile
+cat /tmp/test-Dockerfile
+
+# Validate template placeholders
+grep -r "{{" templates/  # Should show all placeholders
+
+# Test template generation with dry-run
+# (Run 2-generate-project.sh and review generated files without deploying)
+./2-generate-project.sh
+# Answer prompts, then select 'n' for deployment questions
+```
+
 ### Cleanup Commands
 ```bash
 # Stop and remove all components
@@ -172,11 +234,31 @@ rm -rf k8s/
 ## Critical Implementation Details
 
 ### Template Placeholder System
-The `2-generate-project.sh` script uses a placeholder replacement pattern:
-1. Embed full file templates in heredocs with `PLACEHOLDER` tokens
-2. Write heredoc to file
-3. Use `sed_inplace()` to replace all placeholders with user-provided values
-4. Example: `APP_NAME_PLACEHOLDER` → `${APP_NAME}` via `sed_inplace "s|APP_NAME_PLACEHOLDER|${APP_NAME}|g" Jenkinsfile`
+The `2-generate-project.sh` script uses a template-based file generation pattern:
+1. Template files stored in `templates/` directory with `{{PLACEHOLDER}}` tokens
+2. `process_template()` function copies template to target location
+3. Multiple `sed_inplace()` calls replace all placeholders with user-provided values
+4. Supported placeholders:
+   - `{{APP_NAME}}` → application name (e.g., `my-app`)
+   - `{{IMAGE_NAME}}` → full image path (e.g., `localhost:5000/my-app`)
+   - `{{APP_PORT}}` → application port (e.g., `80`)
+   - `{{K8S_NAMESPACE}}` → Kubernetes namespace (e.g., `default`)
+   - `{{PHP_VERSION}}` → PHP version (e.g., `8.1`)
+   - `{{GIT_REPO}}` → GitLab repository URL
+   - `{{GIT_BRANCH}}` → Git branch name (e.g., `main`)
+   - `{{HEALTH_CHECK_PATH}}` → health check endpoint path (e.g., `/`)
+5. Template structure:
+   ```
+   templates/
+   ├── Jenkinsfile
+   ├── docker/
+   │   ├── Dockerfile
+   │   └── .dockerignore
+   └── kubernetes/
+       ├── deployment.yaml
+       ├── service.yaml
+       └── namespace.yaml
+   ```
 
 ### Jenkins Docker Socket Access
 Jenkins must access Docker to build images:
@@ -215,31 +297,70 @@ See `INTERVIEW-FLOW.md` for detailed minute-by-minute breakdown.
 ## Modification Guidelines
 
 ### Adding New PHP Versions
-Edit `2-generate-project.sh`:
-1. Update line 62: `echo "Available PHP versions: 7.4, 8.0, 8.1, 8.2, 8.3"`
-2. Dockerfile FROM line automatically uses `${PHP_VERSION}` variable
-3. Test with `docker build --build-arg PHP_VERSION=8.3`
+1. Edit `2-generate-project.sh` - Update available versions list:
+   ```bash
+   echo "Available PHP versions: 7.4, 8.0, 8.1, 8.2, 8.3, 8.4"
+   ```
+2. Template automatically uses `{{PHP_VERSION}}` placeholder - no template changes needed
+3. Verify PHP version exists on Docker Hub: `docker pull php:8.4-apache`
 
 ### Supporting Additional Tools
 To add Node.js, Python, etc.:
 1. Add `install_nodejs()` function to `1-infra-setup.sh` following existing patterns
 2. Call from `main()` function
 3. Add to `validate_installation()` checks
-4. Update Dockerfile template in `2-generate-project.sh` if needed
+4. Edit `templates/docker/Dockerfile` to install additional runtime/dependencies
 
 ### Customizing Jenkinsfile Stages
-Edit the Jenkinsfile heredoc in `2-generate-project.sh` (lines 153-283):
+Edit `templates/Jenkinsfile`:
 - Add stages between existing ones
 - Use `sh '''...'''` for multi-line shell commands
 - Use `sh """..."""` for commands needing variable expansion
 - Always add to `post` block if cleanup needed
+- Keep `{{PLACEHOLDER}}` tokens for values that should be replaced
 
 ### Changing K8s Resource Defaults
-Edit `k8s/deployment.yaml` template in `2-generate-project.sh` (lines 294-338):
+Edit `templates/kubernetes/deployment.yaml`:
 - Resource requests: `memory: "128Mi"`, `cpu: "100m"`
 - Resource limits: `memory: "256Mi"`, `cpu: "200m"`
-- Replicas: Line 303 `replicas: 1`
-- Probe timings: `initialDelaySeconds`, `periodSeconds`
+- Replicas: `replicas: 1`
+- Probe timings: `initialDelaySeconds`, `periodSeconds`, `failureThreshold`
+- Security context: `runAsUser`, `fsGroup`, `capabilities`
+
+### Adding New Template Placeholders
+To add a new placeholder (e.g., `{{DATABASE_HOST}}`):
+1. Add the placeholder in template files (e.g., `templates/kubernetes/deployment.yaml`)
+2. Collect value from user in `2-generate-project.sh` prompts section
+3. Add replacement in `process_template()` function:
+   ```bash
+   sed_inplace "s|{{DATABASE_HOST}}|${DATABASE_HOST}|g" "$output_file"
+   ```
+
+## Jenkins Automation Architecture
+
+### Two-Stage Jenkins Setup
+
+**Stage 1: Jenkins Deployment (During Infrastructure Setup)**
+- `jenkins-init-scripts/deploy-jenkins.sh` runs Jenkins container with init scripts
+- Groovy init scripts execute on first boot (mounted at `/var/jenkins_home/init.groovy.d/`)
+- Fully automated: No setup wizard, admin user auto-created, plugins pre-installed
+- Jenkins runs in **host Docker** (not minikube) for faster startup and simpler architecture
+
+**Stage 2: Pipeline Job Creation (After Project Generation)**
+- `helpers/create-jenkins-job.sh` creates pipeline job via Jenkins Script Console API
+- Runs after user provides GitLab URL and app configuration
+- Automatically creates GitLab credentials in Jenkins
+- Separate from deployment to maintain single responsibility principle
+
+### Jenkins Init Scripts Flow
+1. **01-install-plugins.groovy**: Installs 6 essential plugins, skips setup wizard
+2. **02-create-admin-user.groovy**: Creates admin/admin user, configures security realm
+3. **03-configure-executors.groovy**: Sets executor count to 2 for parallel builds
+
+### Why Two Separate Scripts?
+- **deploy-jenkins.sh**: Infrastructure concern - sets up Jenkins container, should run once
+- **create-jenkins-job.sh**: Project concern - creates app-specific pipeline, runs per project
+- Separation allows creating multiple projects without redeploying Jenkins
 
 ## Troubleshooting Common Issues
 
@@ -293,5 +414,7 @@ docker ps  # Verify running
 2. **Simplicity over features** - No Helm, no service mesh, no complex networking
 3. **Interview-optimized** - Designed for 3-hour constraint, fresh laptop, unknown OS
 4. **Foolproof automation** - Scripts handle edge cases, validate everything
-5. **Best practices embedded** - Templates include health checks, resource limits, proper labels
+5. **Best practices embedded** - Templates include health checks, resource limits, proper labels, security contexts
 6. **Educational value** - User learns by seeing generated files, not black-box magic
+7. **Maintainability** - Template-based generation makes files easy to customize and version control
+8. **Single responsibility** - Each script does one job well (infra setup, project generation, job creation)

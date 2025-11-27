@@ -1,130 +1,120 @@
-# Jenkins Init Scripts
+# Jenkins Setup Scripts
 
-These Groovy scripts are automatically executed when Jenkins starts for the first time. They provide full automation of Jenkins setup, eliminating the need for manual configuration through the setup wizard.
+This directory contains scripts for Jenkins deployment and configuration.
 
-## How It Works
+## Files
 
-These scripts are mounted into the Jenkins container at:
-```
-/usr/share/jenkins/ref/init.groovy.d/
-```
-
-Jenkins automatically executes all `.groovy` files in this directory during initialization.
-
-## Scripts
-
-### 01-install-plugins.groovy
-**Purpose:** Install essential Jenkins plugins automatically
+### 1. deploy-jenkins.sh
+**Purpose:** Deploy and configure Jenkins container
 
 **What it does:**
-- Skips the setup wizard
-- Installs these plugins:
-  - `workflow-aggregator` - Pipeline support
-  - `git` - Git integration
-  - `credentials-binding` - Secure credential management
-  - `docker-workflow` - Docker pipeline steps
-  - `pipeline-stage-view` - Better pipeline visualization
-  - `timestamper` - Timestamps in console logs
+- Deploys Jenkins in HOST Docker (not minikube)
+- Mounts Groovy init scripts for automation
+- Installs Docker CLI and kubectl inside Jenkins
+- Configures Docker socket permissions
+- Copies kubeconfig for K8s access
 
-**Why these plugins:**
-- Required for running the generated Jenkinsfile
-- Enable Docker builds and Kubernetes deployments
-- Provide better UX for pipeline management
+**When to run:** Automatically called by `./1-infra-setup.sh`
 
-### 02-create-admin-user.groovy
-**Purpose:** Create admin user automatically
+**Output:**
+- Jenkins at http://localhost:8080
+- Credentials: admin / admin
+- Plugins installed, security configured, 2 executors
 
-**What it does:**
-- Creates user: `admin` / `admin`
-- Configures security realm
-- Sets authorization strategy
-- Disables anonymous access
+---
 
-**Security Note:**
-- Default credentials are `admin/admin`
-- Change these in production environments
-- For interview/demo purposes, these simple credentials are acceptable
+### 2. Groovy Init Scripts (Auto-executed)
 
-### 03-configure-executors.groovy
-**Purpose:** Set executor count
+#### 01-install-plugins.groovy
+- Installs essential plugins: Pipeline, Git, Docker, etc.
+- Skips setup wizard
+- Takes 2-3 minutes
 
-**What it does:**
-- Configures Jenkins to run 2 jobs in parallel
-- Sufficient for interview demo purposes
-- Can be adjusted based on system resources
+#### 02-create-admin-user.groovy
+- Creates admin/admin user
+- Configures security settings
 
-### 04-create-pipeline-job.groovy
-**Purpose:** Automatically create PHP application pipeline job
+#### 03-configure-executors.groovy
+- Sets executor count to 2
 
-**What it does:**
-- Creates pipeline job named `php-app-pipeline`
-- Configures Git SCM with placeholder URL
-- Sets up SCM polling every 2 minutes (`H/2 * * * *`)
-- References `Jenkinsfile` in repository root
-- Expects credentials ID: `gitlab-creds`
+**Note:** These run automatically when Jenkins starts. Do not modify the numbering (01, 02, 03) as it determines execution order.
 
-**What happens when triggered:**
-1. Pulls latest code from GitLab
-2. Checks PHP syntax
-3. Builds Docker image (in minikube's Docker)
-4. Deploys to Kubernetes (rolling update)
-5. Verifies deployment
+---
 
-**User must configure:**
-- Update Git repository URL in job configuration
-- Create `gitlab-creds` credential in Jenkins
-- Ensure repository has a `Jenkinsfile` in root
+## Pipeline Job Creation
 
-## Usage
+Pipeline jobs are NOT created during Jenkins setup. Instead:
 
-These scripts are automatically used by `deploy-jenkins.sh`:
+**Option 1: Automated (Recommended)**
+Run `./2-generate-project.sh` which will:
+1. Generate Jenkinsfile, Dockerfile, K8s manifests
+2. Prompt: "Create Jenkins pipeline job now? [Y/n]"
+3. If yes, automatically creates:
+   - GitLab/GitHub credentials in Jenkins
+   - Pipeline job with correct URL, branch, namespace
+   - SCM polling configured
 
+**Option 2: Manual**
+1. Go to http://localhost:8080/newJob
+2. Create Pipeline job
+3. Configure SCM settings manually
+
+---
+
+## File Separation Logic
+
+| File | Purpose | When | Automatic? |
+|------|---------|------|------------|
+| `deploy-jenkins.sh` | Setup Jenkins | During 1-infra-setup.sh | ✅ Yes |
+| `01-03-*.groovy` | Configure Jenkins | On Jenkins startup | ✅ Yes |
+| `helpers/create-jenkins-job.sh` | Create pipeline job | After 2-generate-project.sh | ⚙️ Optional |
+
+---
+
+## Troubleshooting
+
+**Jenkins not starting:**
 ```bash
-# Script mounts this directory into Jenkins container
--v "$INIT_SCRIPTS_DIR":/usr/share/jenkins/ref/init.groovy.d:ro
+docker logs jenkins
 ```
 
-The `:ro` flag makes it read-only for security.
+**Plugin installation failed:**
+Check logs for Groovy script errors. Plugins may be installing in background - wait 5 minutes.
+
+**Pipeline job creation failed:**
+Ensure Jenkins is fully initialized (all plugins loaded). Wait a few minutes after startup.
+
+---
 
 ## Customization
 
-To modify the automation:
+**Add more plugins:**
+Edit `01-install-plugins.groovy`, add plugin IDs to the `plugins` array.
 
-1. **Add more plugins:**
-   Edit `01-install-plugins.groovy`, add plugin IDs to the `plugins` array
+**Change admin password:**
+Edit `02-create-admin-user.groovy`, modify `createAccount()` parameters.
 
-2. **Change admin credentials:**
-   Edit `02-create-admin-user.groovy`, change `createAccount()` parameters
+**Adjust executors:**
+Edit `03-configure-executors.groovy`, change `setNumExecutors()` value.
 
-3. **Adjust executors:**
-   Edit `03-configure-executors.groovy`, change `setNumExecutors()` value
+---
 
-4. **Add new automation:**
-   Create new `.groovy` files (will be executed in alphabetical order)
+## Architecture
 
-## Debugging
-
-If Jenkins fails to start after modifications:
-
-1. Check container logs:
-   ```bash
-   docker logs jenkins
-   ```
-
-2. Look for Groovy errors in the logs
-
-3. Verify script syntax:
-   ```bash
-   groovy -c jenkins-init-scripts/01-install-plugins.groovy
-   ```
-
-4. Check Jenkins init logs:
-   ```bash
-   docker exec jenkins cat /var/jenkins_home/logs/jenkins.log
-   ```
-
-## References
-
-- [Jenkins Init Scripts Documentation](https://www.jenkins.io/doc/book/managing/groovy-hook-scripts/)
-- [Jenkins Plugin Manager API](https://javadoc.jenkins.io/plugin/plugin/)
-- [Jenkins Security API](https://javadoc.jenkins.io/jenkins/model/Jenkins.html)
+```
+1-infra-setup.sh
+    ↓
+jenkins-init-scripts/deploy-jenkins.sh
+    ↓
+Jenkins container starts
+    ↓
+Auto-runs: 01-install-plugins.groovy
+Auto-runs: 02-create-admin-user.groovy
+Auto-runs: 03-configure-executors.groovy
+    ↓
+Jenkins ready: http://localhost:8080
+    ↓
+User runs: 2-generate-project.sh
+    ↓
+(Optional) Auto-creates pipeline job via helpers/create-jenkins-job.sh
+```

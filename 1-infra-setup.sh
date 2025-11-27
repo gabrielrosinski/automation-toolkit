@@ -608,7 +608,7 @@ main() {
     # Deploy Jenkins using separate script
     # Jenkins runs in HOST Docker (not minikube's Docker)
     log_info "Running Jenkins deployment script..."
-    if ! bash "$(dirname "${BASH_SOURCE[0]}")/deploy-jenkins.sh"; then
+    if ! bash "$(dirname "${BASH_SOURCE[0]}")/jenkins-init-scripts/deploy-jenkins.sh"; then
         log_error "Jenkins deployment failed! Setup cannot continue."
         log_info "Please check the errors above and retry."
         exit 1
@@ -638,13 +638,11 @@ main() {
 
     echo "Next steps:"
     echo "1. Access Jenkins at http://localhost:8080 (admin / admin)"
-    echo "2. Create GitLab credentials in Jenkins (ID: gitlab-creds)"
-    echo "3. Configure auto-created pipeline: http://localhost:8080/job/php-app-pipeline/configure"
-    echo "4. Clone your GitLab repository"
-    echo "5. Run: ./2-generate-project.sh to generate Jenkinsfile and K8s manifests"
-    echo "6. Push Jenkinsfile to GitLab and trigger first build"
-    echo ""
-    echo "See helpers/jenkins-setup.sh for detailed instructions"
+    echo "2. Clone your Git repository"
+    echo "3. Run: ./2-generate-project.sh (generates Jenkinsfile, Dockerfile, K8s manifests)"
+    echo "4. Script will prompt to auto-create Jenkins pipeline job"
+    echo "5. Push generated files to your repository"
+    echo "6. Jenkins will auto-build when changes are detected"
     echo ""
     echo "Useful commands:"
     echo "  minikube status                  - Check cluster status"

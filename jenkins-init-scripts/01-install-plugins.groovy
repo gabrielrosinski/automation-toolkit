@@ -61,7 +61,14 @@ if (!pluginsToInstall.isEmpty()) {
         future.get()
     }
     println "Plugin installation complete!"
-    println "Jenkins will restart to activate plugins..."
-}
+    println "Restarting Jenkins to activate plugins..."
+    jenkins.save()
 
-jenkins.save()
+    // Schedule restart after a short delay to allow this script to complete
+    Thread.start {
+        Thread.sleep(3000)
+        jenkins.safeRestart()
+    }
+} else {
+    jenkins.save()
+}

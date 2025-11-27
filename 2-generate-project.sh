@@ -190,7 +190,7 @@ if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
 fi
 
 echo ""
-log_info "Generating deployment files..."
+log_info "Generating deployment files from templates..."
 
 # Create .env.interview file with credentials
 log_info "Saving configuration to .env.interview..."
@@ -221,366 +221,59 @@ fi
 
 log_success "Configuration saved to .env.interview (git ignored)"
 
+# Verify templates directory exists
+if [ ! -d "$TEMPLATES_DIR" ]; then
+    log_error "Templates directory not found: $TEMPLATES_DIR"
+    exit 1
+fi
+
 # Create directories
 mkdir -p k8s
 
+# Helper function to process template files
+process_template() {
+    local template_file="$1"
+    local output_file="$2"
+    local description="$3"
+
+    if [ ! -f "$template_file" ]; then
+        log_error "Template not found: $template_file"
+        exit 1
+    fi
+
+    log_info "Generating $description from template..."
+    cp "$template_file" "$output_file"
+
+    # Replace all placeholders with actual values
+    sed_inplace "s|{{APP_NAME}}|${APP_NAME}|g" "$output_file"
+    sed_inplace "s|{{IMAGE_NAME}}|${DOCKER_REGISTRY}/${APP_NAME}|g" "$output_file"
+    sed_inplace "s|{{APP_PORT}}|${APP_PORT}|g" "$output_file"
+    sed_inplace "s|{{K8S_NAMESPACE}}|${K8S_NAMESPACE}|g" "$output_file"
+    sed_inplace "s|{{PHP_VERSION}}|${PHP_VERSION}|g" "$output_file"
+    sed_inplace "s|{{GIT_REPO}}|${GITLAB_URL}|g" "$output_file"
+    sed_inplace "s|{{GIT_BRANCH}}|${GIT_BRANCH}|g" "$output_file"
+    sed_inplace "s|{{HEALTH_CHECK_PATH}}|/|g" "$output_file"
+
+    log_success "✓ $description created"
+}
+
 # Generate Dockerfile
-log_info "Generating Dockerfile..."
-cat > Dockerfile << EOF
-# Multi-stage build for PHP application
-FROM php:${PHP_VERSION}-apache as base
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \\
-    git \\
-    curl \\
-    libpng-dev \\
-    libonig-dev \\
-    libxml2-dev \\
-    zip \\
-    unzip \\
-    && apt-get clean \\
-    && rm -rf /var/lib/apt/lists/*
-
-# Install PHP extensions
-RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd
-
-# Enable Apache mod_rewrite
-RUN a2enmod rewrite
-
-# Set working directory
-WORKDIR /var/www/html
-
-# Copy application code
-COPY . /var/www/html/
-
-# Set permissions
-RUN chown -R www-data:www-data /var/www/html \\
-    && chmod -R 755 /var/www/html
-
-# Expose port
-EXPOSE ${APP_PORT}
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \\
-    CMD curl -f http://localhost:${APP_PORT}/ || exit 1
-
-# Start Apache
-CMD ["apache2-foreground"]
-EOF
-
-log_success "✓ Dockerfile created"
+process_template "$TEMPLATES_DIR/docker/Dockerfile" "Dockerfile" "Dockerfile"
 
 # Generate Jenkinsfile
-log_info "Generating Jenkinsfile..."
-cat > Jenkinsfile << 'JENKINSFILE_END'
-pipeline {
-    agent any
+process_template "$TEMPLATES_DIR/Jenkinsfile" "Jenkinsfile" "Jenkinsfile"
 
-    environment {
-        DOCKER_REGISTRY = 'localhost:5000'
-        IMAGE_NAME = 'APP_NAME_PLACEHOLDER'
-        IMAGE_TAG = "${BUILD_NUMBER}"
-        GIT_REPO = 'GITLAB_URL_PLACEHOLDER'
-        K8S_NAMESPACE = 'K8S_NAMESPACE_PLACEHOLDER'
-    }
-
-    stages {
-        stage('Pre-Flight Check') {
-            steps {
-                script {
-                    echo "=========================================="
-                    echo "Pre-Flight Environment Validation"
-                    echo "=========================================="
-
-                    sh '''
-                        # Verify Docker access
-                        echo "Checking Docker access..."
-                        if ! docker version >/dev/null 2>&1; then
-                            echo "ERROR: Docker is not accessible"
-                            exit 1
-                        fi
-                        echo "✓ Docker is accessible"
-
-                        # Verify kubectl access
-                        echo "Checking kubectl access..."
-                        if ! kubectl cluster-info >/dev/null 2>&1; then
-                            echo "ERROR: kubectl is not configured"
-                            exit 1
-                        fi
-                        echo "✓ kubectl is configured"
-
-                        # Create namespace if needed
-                        echo "Checking namespace: ${K8S_NAMESPACE}..."
-                        if ! kubectl get namespace ${K8S_NAMESPACE} >/dev/null 2>&1; then
-                            echo "Creating namespace: ${K8S_NAMESPACE}"
-                            kubectl create namespace ${K8S_NAMESPACE}
-                        fi
-                        echo "✓ Namespace ${K8S_NAMESPACE} exists"
-
-                        # Verify registry access (optional)
-                        echo "Checking registry access..."
-                        curl -f http://${DOCKER_REGISTRY}/v2/ >/dev/null 2>&1 || \
-                            echo "WARNING: Registry may not be accessible (non-critical)"
-
-                        echo "=========================================="
-                        echo "✓ Pre-flight checks passed"
-                        echo "=========================================="
-                    '''
-                }
-            }
-        }
-
-        stage('Checkout') {
-            steps {
-                echo "Cloning repository from GitLab..."
-                git branch: 'GIT_BRANCH_PLACEHOLDER',
-                    url: "${GIT_REPO}"
-            }
-        }
-        
-        stage('PHP Syntax Check') {
-            steps {
-                echo "Running PHP syntax check..."
-                script {
-                    sh '''
-                        # Check all PHP files for syntax errors
-                        echo "Checking PHP syntax..."
-                        ERROR_COUNT=0
-                        while IFS= read -r file; do
-                            if ! php -l "$file" > /dev/null 2>&1; then
-                                echo "ERROR: Syntax error in $file"
-                                php -l "$file"
-                                ERROR_COUNT=$((ERROR_COUNT + 1))
-                            fi
-                        done < <(find . -name "*.php" -not -path "./vendor/*")
-
-                        if [ $ERROR_COUNT -gt 0 ]; then
-                            echo "Found $ERROR_COUNT file(s) with syntax errors"
-                            exit 1
-                        else
-                            echo "All PHP files passed syntax check"
-                        fi
-                    '''
-                }
-            }
-        }
-        
-        stage('Build Docker Image') {
-            steps {
-                echo "Building Docker image..."
-                script {
-                    sh """
-                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-                        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                        docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${DOCKER_REGISTRY}/${IMAGE_NAME}:latest
-                    """
-                }
-            }
-        }
-        
-        stage('Push to Registry') {
-            steps {
-                echo "Pushing image to registry..."
-                script {
-                    sh """
-                        # Push to minikube local registry
-                        docker push ${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                        docker push ${DOCKER_REGISTRY}/${IMAGE_NAME}:latest
-                    """
-                }
-            }
-        }
-        
-        stage('Deploy to Kubernetes') {
-            steps {
-                echo "Deploying to Kubernetes..."
-                script {
-                    sh """
-                        # Update deployment image
-                        kubectl set image deployment/${IMAGE_NAME} \\
-                            ${IMAGE_NAME}=${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} \\
-                            -n ${K8S_NAMESPACE} || \\
-                        kubectl apply -f k8s/ -n ${K8S_NAMESPACE}
-                    """
-                }
-            }
-        }
-        
-        stage('Verify Deployment') {
-            steps {
-                echo "Verifying deployment..."
-                script {
-                    sh """
-                        kubectl rollout status deployment/${IMAGE_NAME} -n ${K8S_NAMESPACE}
-                        kubectl get pods -n ${K8S_NAMESPACE} -l app=${IMAGE_NAME}
-                        kubectl get svc -n ${K8S_NAMESPACE} -l app=${IMAGE_NAME}
-                    """
-                }
-            }
-        }
-    }
-    
-    post {
-        success {
-            echo '✅ Pipeline succeeded!'
-            script {
-                sh """
-                    echo "Application deployed successfully!"
-                    echo "Access via: minikube service ${IMAGE_NAME} -n ${K8S_NAMESPACE} --url"
-                """
-            }
-        }
-        failure {
-            echo '❌ Pipeline failed!'
-            script {
-                sh '''
-                    echo "Debug information:"
-                    docker ps -a || true
-                    kubectl get pods -n ${K8S_NAMESPACE} || true
-                    kubectl describe pods -n ${K8S_NAMESPACE} || true
-                '''
-            }
-        }
-        always {
-            echo 'Cleaning up...'
-            sh 'docker system prune -f || true'
-        }
-    }
-}
-JENKINSFILE_END
-
-# Replace placeholders
-sed_inplace "s|APP_NAME_PLACEHOLDER|${APP_NAME}|g" Jenkinsfile
-sed_inplace "s|GITLAB_URL_PLACEHOLDER|${GITLAB_URL}|g" Jenkinsfile
-sed_inplace "s|K8S_NAMESPACE_PLACEHOLDER|${K8S_NAMESPACE}|g" Jenkinsfile
-sed_inplace "s|GIT_BRANCH_PLACEHOLDER|${GIT_BRANCH}|g" Jenkinsfile
-
-log_success "✓ Jenkinsfile created"
-
-# Generate Kubernetes Deployment
-log_info "Generating Kubernetes deployment..."
-cat > k8s/deployment.yaml << EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ${APP_NAME}
-  namespace: ${K8S_NAMESPACE}
-  labels:
-    app: ${APP_NAME}
-  annotations:
-    description: "PHP application deployed via Jenkins CI/CD"
-    version: "latest"
-spec:
-  replicas: 1
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  selector:
-    matchLabels:
-      app: ${APP_NAME}
-  template:
-    metadata:
-      labels:
-        app: ${APP_NAME}
-    spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 33  # www-data
-        fsGroup: 33
-      containers:
-      - name: ${APP_NAME}
-        image: ${DOCKER_REGISTRY}/${APP_NAME}:latest
-        imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: ${APP_PORT}
-          name: http
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-              - ALL
-          readOnlyRootFilesystem: false  # PHP needs write access to /tmp
-        startupProbe:
-          httpGet:
-            path: /
-            port: ${APP_PORT}
-          failureThreshold: 30
-          periodSeconds: 10
-        livenessProbe:
-          httpGet:
-            path: /
-            port: ${APP_PORT}
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /
-            port: ${APP_PORT}
-          initialDelaySeconds: 10
-          periodSeconds: 5
-        resources:
-          requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
-            memory: "256Mi"
-            cpu: "200m"
-EOF
-
-log_success "✓ k8s/deployment.yaml created (with security best practices)"
-
-# Generate Kubernetes Service
-log_info "Generating Kubernetes service..."
-cat > k8s/service.yaml << EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: ${APP_NAME}
-  namespace: ${K8S_NAMESPACE}
-  labels:
-    app: ${APP_NAME}
-spec:
-  type: NodePort
-  selector:
-    app: ${APP_NAME}
-  ports:
-  - port: ${APP_PORT}
-    targetPort: ${APP_PORT}
-    protocol: TCP
-    name: http
-EOF
-
-log_success "✓ k8s/service.yaml created"
+# Generate Kubernetes manifests
+process_template "$TEMPLATES_DIR/kubernetes/deployment.yaml" "k8s/deployment.yaml" "Kubernetes deployment"
+process_template "$TEMPLATES_DIR/kubernetes/service.yaml" "k8s/service.yaml" "Kubernetes service"
 
 # Generate namespace (if not default)
 if [[ "$K8S_NAMESPACE" != "default" ]]; then
-    log_info "Generating Kubernetes namespace..."
-    cat > k8s/namespace.yaml << EOF
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ${K8S_NAMESPACE}
-EOF
-    log_success "✓ k8s/namespace.yaml created"
+    process_template "$TEMPLATES_DIR/kubernetes/namespace.yaml" "k8s/namespace.yaml" "Kubernetes namespace"
 fi
 
 # Generate .dockerignore
-log_info "Generating .dockerignore..."
-cat > .dockerignore << EOF
-.git
-.gitignore
-README.md
-Jenkinsfile
-k8s/
-*.md
-.env
-.env.*
-EOF
-
-log_success "✓ .dockerignore created"
+process_template "$TEMPLATES_DIR/docker/.dockerignore" ".dockerignore" ".dockerignore"
 
 # Generate deployment helper script
 log_info "Generating quick deploy script..."
@@ -628,7 +321,29 @@ echo "  ✓ quick-deploy.sh"
 echo "  ✓ .env.interview (credentials - git ignored)"
 echo ""
 
-# Optional: Deploy to Kubernetes now
+# Optional: Create Jenkins job FIRST (before switching Docker context)
+echo "=========================================="
+read -p "Create Jenkins pipeline job now? [Y/n]: " CREATE_JENKINS
+CREATE_JENKINS=${CREATE_JENKINS:-Y}
+
+if [[ "$CREATE_JENKINS" =~ ^[Yy]$ ]]; then
+    log_info "Creating Jenkins pipeline job..."
+
+    if [ -f "${SCRIPT_DIR}/helpers/create-jenkins-job.sh" ]; then
+        "${SCRIPT_DIR}/helpers/create-jenkins-job.sh" "$APP_NAME" "$GITLAB_URL" "$GIT_BRANCH" "$K8S_NAMESPACE"
+    else
+        log_error "Helper script not found: ${SCRIPT_DIR}/helpers/create-jenkins-job.sh"
+        log_info "You can create the job manually using: http://localhost:8080"
+    fi
+else
+    echo ""
+    log_info "Skipped Jenkins job creation"
+    log_info "Create it later with:"
+    echo "  ${SCRIPT_DIR}/helpers/create-jenkins-job.sh \"$APP_NAME\" \"$GITLAB_URL\" \"$GIT_BRANCH\" \"$K8S_NAMESPACE\""
+fi
+
+# Optional: Deploy to Kubernetes (after Jenkins job creation)
+echo ""
 echo "=========================================="
 read -p "Deploy to Kubernetes now? [Y/n]: " DEPLOY_NOW
 DEPLOY_NOW=${DEPLOY_NOW:-Y}
@@ -683,28 +398,6 @@ if [[ "$DEPLOY_NOW" =~ ^[Yy]$ ]]; then
         log_warning "Deployment is taking longer than expected"
         log_info "Check status with: kubectl get pods -n ${K8S_NAMESPACE}"
     fi
-fi
-
-# Optional: Create Jenkins job
-echo ""
-echo "=========================================="
-read -p "Create Jenkins pipeline job now? [Y/n]: " CREATE_JENKINS
-CREATE_JENKINS=${CREATE_JENKINS:-Y}
-
-if [[ "$CREATE_JENKINS" =~ ^[Yy]$ ]]; then
-    log_info "Creating Jenkins pipeline job..."
-
-    if [ -f "${SCRIPT_DIR}/helpers/create-jenkins-job.sh" ]; then
-        "${SCRIPT_DIR}/helpers/create-jenkins-job.sh" "$APP_NAME" "$GITLAB_URL" "$GIT_BRANCH" "$K8S_NAMESPACE"
-    else
-        log_error "Helper script not found: ${SCRIPT_DIR}/helpers/create-jenkins-job.sh"
-        log_info "You can create the job manually using: http://localhost:8080"
-    fi
-else
-    echo ""
-    log_info "Skipped Jenkins job creation"
-    log_info "Create it later with:"
-    echo "  ${SCRIPT_DIR}/helpers/create-jenkins-job.sh \"$APP_NAME\" \"$GITLAB_URL\" \"$GIT_BRANCH\" \"$K8S_NAMESPACE\""
 fi
 
 echo ""

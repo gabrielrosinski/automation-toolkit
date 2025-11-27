@@ -1,0 +1,11 @@
+.git
+.gitignore
+README.md
+Jenkinsfile
+k8s/
+kubernetes/
+.env
+.env.*
+*.md
+docker-compose.yml
+*.log
