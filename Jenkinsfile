@@ -47,27 +47,56 @@ pipeline {
             }
         }
 
+        stage('Find PHP App Directory') {
+            steps {
+                script {
+                    // Find directory containing index.php (exclude buged-php, vendor, templates, node_modules)
+                    def appDir = sh(
+                        script: '''#!/bin/bash
+                            INDEX_FILE=$(find . -name "index.php" \
+                                -not -path "./buged-php/*" \
+                                -not -path "./vendor/*" \
+                                -not -path "./templates/*" \
+                                -not -path "./node_modules/*" \
+                                -type f | head -1)
+
+                            if [ -z "$INDEX_FILE" ]; then
+                                echo "."
+                            else
+                                dirname "$INDEX_FILE"
+                            fi
+                        ''',
+                        returnStdout: true
+                    ).trim()
+
+                    env.APP_DIR = appDir
+                    echo "PHP app directory: ${env.APP_DIR}"
+                }
+            }
+        }
+
         stage('PHP Syntax Check') {
             steps {
                 script {
-                    echo "Running PHP syntax check..."
-                    def result = sh(script: '''
+                    echo "Running PHP syntax check in ${env.APP_DIR}..."
+                    def result = sh(script: """#!/bin/bash
                         set +e
                         ERROR_COUNT=0
+                        APP_DIR="${env.APP_DIR}"
 
-                        for file in $(find . -name "*.php" -not -path "./vendor/*" -not -path "./buged-php/*"); do
-                            if ! php -l "$file" 2>&1; then
-                                ERROR_COUNT=$((ERROR_COUNT + 1))
+                        for file in \$(find "\$APP_DIR" -name "*.php" -not -path "*/vendor/*"); do
+                            if ! php -l "\$file" 2>&1; then
+                                ERROR_COUNT=\$((ERROR_COUNT + 1))
                             fi
                         done
 
-                        if [ $ERROR_COUNT -gt 0 ]; then
-                            echo "Found $ERROR_COUNT PHP syntax error(s)"
+                        if [ \$ERROR_COUNT -gt 0 ]; then
+                            echo "Found \$ERROR_COUNT PHP syntax error(s)"
                             exit 1
                         fi
 
                         echo "All PHP files passed syntax check"
-                    ''', returnStatus: true)
+                    """, returnStatus: true)
 
                     if (result != 0) {
                         error("PHP syntax check failed")
@@ -80,8 +109,10 @@ pipeline {
             steps {
                 script {
                     echo "Building Docker image in minikube Docker: ${IMAGE_NAME}:${IMAGE_TAG}"
+                    echo "Build context: ${env.APP_DIR}"
                     sh """#!/bin/bash
                         set -e
+                        APP_DIR="${env.APP_DIR}"
 
                         # Source minikube Docker environment (REQUIRED)
                         MINIKUBE_ENV="/var/jenkins_home/minikube-docker-env.sh"
@@ -97,8 +128,9 @@ pipeline {
                         # Remove old :latest tag to prevent stale image issues
                         docker rmi ${IMAGE_NAME}:latest 2>/dev/null || echo "No old :latest tag found"
 
-                        # Build new image
-                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                        # Build from app directory (where index.php is)
+                        echo "Building from: \$APP_DIR"
+                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} "\$APP_DIR"
                         docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
 
                         # Verify image exists in minikube's Docker
