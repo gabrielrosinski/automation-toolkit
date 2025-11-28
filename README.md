@@ -7,8 +7,9 @@
 ## What This Does
 
 Automates the setup and deployment process for DevOps interviews covering:
+- ✅ Self-hosted GitLab CE server (optional - can use external GitLab)
 - ✅ Jenkins CI/CD pipeline
-- ✅ GitLab integration (Git only, not CI/CD)
+- ✅ GitLab-Jenkins integration (Git only, not CI/CD)
 - ✅ Dockerfile creation
 - ✅ Kubernetes (minikube) deployment
 - ✅ PHP debugging
@@ -22,7 +23,7 @@ Automates the setup and deployment process for DevOps interviews covering:
 ### For Testing/Practice
 ```bash
 ./0-preflight-check.sh    # Check system requirements
-./1-infra-setup.sh        # Install everything (~15 min)
+./1-infra-setup.sh        # Install everything (~20-25 min, includes GitLab)
 ./3-verify-setup.sh       # Verify it works
 ```
 
@@ -30,18 +31,28 @@ See **[WORKFLOWS.md](WORKFLOWS.md)** for complete testing flow.
 
 ### For Interview Day
 ```bash
-./1-infra-setup.sh                    # While listening to requirements (15-20 min)
+./1-infra-setup.sh                    # While listening to requirements (20-25 min)
+# → Installs Docker, kubectl, minikube, GitLab CE, Jenkins
+# → GitLab: http://localhost:8090 (root / interview2024)
+# → Jenkins: http://localhost:8080 (admin / admin)
+
+# Option A: Use local GitLab (30 seconds setup)
+# Open http://localhost:8090, login as root/interview2024, create project
+
+# Option B: Clone from external GitLab
 git clone <their-gitlab-url>          # Clone their buggy code
 cd <project>
+
 ../2-generate-project.sh              # ONE SCRIPT: Generate files + Deploy + Jenkins setup (3-5 min)
-# → Prompts for GitLab credentials
+# → Auto-detects local GitLab at localhost:8090
+# → Prompts for GitLab credentials (defaults: root/interview2024)
 # → Generates Dockerfile, Jenkinsfile, K8s manifests
 # → Optionally deploys to K8s
 # → Optionally creates Jenkins pipeline job
 # → DONE! Fix bugs and push - Jenkins auto-deploys
 ```
 
-**Total automation time: ~20-25 minutes** (down from 55+ minutes!)
+**Total automation time: ~25-30 minutes** (down from 55+ minutes!)
 
 See **[WORKFLOWS.md](WORKFLOWS.md)** for complete interview flow.
 
@@ -52,16 +63,26 @@ See **[WORKFLOWS.md](WORKFLOWS.md)** for complete interview flow.
 ```
 lab-toolkit/
 ├── 0-preflight-check.sh      # Pre-installation checks
-├── 1-infra-setup.sh          # Install Docker, kubectl, minikube, Jenkins, PHP
+├── 1-infra-setup.sh          # Install Docker, kubectl, minikube, GitLab, Jenkins, PHP
 ├── 2-generate-project.sh     # Generate files + Deploy + Jenkins job (AUTOMATED!)
 ├── 3-verify-setup.sh         # Verify installation
-├── cleanup.sh                # Clean environment for fresh testing (NEW!)
-├── WORKFLOWS.md              # ⭐ MAIN GUIDE: Testing & Interview flows
+├── cleanup.sh                # Clean environment (default or --full mode)
+├── WORKFLOWS.md              # ⭐ MAIN GUIDE: Testing & Interview flows with GitLab
+│
+├── gitlab-init-scripts/
+│   └── deploy-gitlab.sh      # Automated GitLab CE deployment
+│
+├── jenkins-init-scripts/
+│   ├── deploy-jenkins.sh     # Automated Jenkins deployment
+│   ├── 01-install-plugins.groovy
+│   ├── 02-create-admin-user.groovy
+│   └── 03-configure-executors.groovy
 │
 ├── helpers/
 │   ├── php-debug.sh          # Interactive PHP debugger
 │   ├── jenkins-setup.sh      # Jenkins configuration guide (mostly automated now!)
-│   ├── create-jenkins-job.sh # Auto-create Jenkins pipeline job (NEW!)
+│   ├── create-jenkins-job.sh # Auto-create Jenkins pipeline job
+│   ├── gitlab-helpers.sh     # GitLab operations and troubleshooting (NEW!)
 │   └── k8s-helpers.sh        # kubectl command reference
 │
 ├── docs/
@@ -85,10 +106,22 @@ lab-toolkit/
 - Docker (container runtime)
 - kubectl (Kubernetes CLI)
 - minikube (local K8s cluster)
-- Jenkins (CI/CD server in Docker - **fully automated**, no setup wizard!)
-  - Auto-installed plugins: Pipeline, Git, Docker, Credentials
+- **GitLab CE** (self-hosted Git server in Docker - **minimal mode for interviews**!)
+  - Container name: `gitlab`
+  - Web UI: http://localhost:8090
+  - SSH: port 8022
+  - Pre-configured root account (root/root)
+  - Minimal configuration: Monitoring/registry/pages/KAS disabled
+  - Reduced workers: Puma=2, Sidekiq=10 (faster, lower RAM usage)
+  - 3 persistent volumes (config, logs, data)
+  - Ready to use in ~3-5 minutes (optimized startup)
+- **Jenkins** (CI/CD server in Docker - **fully automated**, no setup wizard!)
+  - Container name: `jenkins`
+  - Web UI: http://localhost:8080
+  - Auto-installed plugins: Pipeline, Git, Docker, Credentials, Stage View, Timestamper
   - Pre-configured admin account (admin/admin)
   - Ready to use in ~3-4 minutes
+  - Connected to GitLab via custom bridge network
 - PHP CLI (for debugging)
 - Git
 
@@ -104,10 +137,20 @@ lab-toolkit/
 
 ## Key Features
 
+### Self-Hosted GitLab CE - Minimal Mode for Interviews
+- **Fully automated deployment** - No manual configuration needed
+- **Pre-configured credentials** - root/root
+- **Minimal configuration** - Monitoring/registry/pages/KAS disabled for faster performance
+- **Optimized for interviews** - Reduced workers (Puma=2, Sidekiq=10), lower RAM usage (~4-6GB vs 10-12GB)
+- **Custom Docker network** - Seamless GitLab ↔ Jenkins communication
+- **Auto-detected by scripts** - Automatically uses local GitLab if available
+- **URL translation** - Scripts handle localhost vs container hostname differences
+
 ### Fully Automated Jenkins Setup
 - **Zero manual configuration** - No setup wizard, no plugin clicking
 - **Auto-installed plugins** - Pipeline, Git, Docker, Credentials, Stage View, Timestamper
 - **Pre-configured security** - Admin user created (admin/admin)
+- **GitLab integration** - Auto-configured to pull from GitLab repos
 - **Production-ready** - Create pipeline jobs immediately after install
 
 ### Smart Auto-Detection
@@ -155,9 +198,10 @@ lab-toolkit/
 
 | Topic | Coverage |
 |-------|----------|
+| **GitLab CE Self-Hosted** | Docker deployment, Git operations, project creation (not CI/CD) |
 | **Jenkins** | Full CI/CD pipeline with Docker + K8s deployment |
-| **GitLab On-Premise** | Git clone, commit, push (not CI/CD) |
-| **Dockerfile** | Multi-stage, health checks, best practices |
+| **GitLab-Jenkins Integration** | Network bridge, URL translation, automated credentials |
+| **Dockerfile** | Multi-stage, health checks, non-root, best practices |
 | **Kubernetes** | Deployment, service, probes, resource management |
 | **PHP Debugging** | Syntax checking, local testing, common bugs |
 
@@ -166,19 +210,22 @@ lab-toolkit/
 ## Time Breakdown
 
 **Testing Flow (Practice):**
-- Setup: 20 min (one-time)
+- Setup: 25 min (one-time - includes GitLab initialization)
 - Each practice session: 30-45 min
 - Recommended: 2-3 practice sessions
 
 **Interview Flow:**
-- Setup: 15 min (automated - Docker, kubectl, minikube, Jenkins with plugins)
+- Setup: 25 min (automated - Docker, kubectl, minikube, GitLab, Jenkins with plugins)
+- GitLab Project: 1 min (create project in web UI - 30 seconds)
 - Generate & Configure: 5 min (ONE SCRIPT - files + deploy + Jenkins job)
 - Debug PHP: 20 min (LLM-assisted or manual)
 - Commit & Push: 2 min (Jenkins auto-triggers)
-- Verify & Demo: 25 min
-- Q&A: 45 min
-- **Total: ~1hr 52min** (1hr 8min buffer with full automation!)
+- Verify & Demo: 15 min
+- Q&A: 52 min
+- **Total: ~2hr** (1hr buffer with full automation!)
 - **Time saved vs manual: 35-40 minutes**
+
+See **[WORKFLOWS.md](WORKFLOWS.md)** for detailed minute-by-minute breakdown.
 
 ---
 
@@ -186,9 +233,22 @@ lab-toolkit/
 
 ### Clean Environment for Testing
 ```bash
-./cleanup.sh  # Removes Jenkins, minikube, generated files
-              # Preserves installed software (Docker, kubectl, etc.)
-              # Perfect for testing script changes
+# DEFAULT MODE - Remove stale resources, keep base images & network
+./cleanup.sh
+# Removes:
+#  - GitLab & Jenkins containers + volumes (fresh start)
+#  - minikube cluster
+#  - Toolkit-built Docker images
+#  - Generated files
+# Preserves:
+#  - Installed software (Docker, kubectl, minikube, PHP, Git)
+#  - gitlab-jenkins-network (faster re-setup)
+#  - Base images (gitlab/gitlab-ce, jenkins/jenkins, php:*) - faster re-setup
+
+# FULL MODE - Complete wipe including base images
+./cleanup.sh --full
+# Removes EVERYTHING including base images
+# Next setup will download all base images (~2GB)
 ```
 
 ### Full Testing Cycle

@@ -285,7 +285,7 @@ git push origin main
 # Pipeline job was AUTO-CREATED in Phase 3:
 # ✅ GitLab credentials added
 # ✅ Pipeline job "php-app-pipeline" created
-# ✅ SCM polling configured (every 5 minutes)
+# ✅ SCM polling configured (every 2 minutes)
 
 # Open Jenkins: http://localhost:8080
 # Login: admin / admin
@@ -302,7 +302,7 @@ git add index.php
 git commit -m "Test CI/CD pipeline"
 git push origin main
 
-# Option A: Wait for auto-polling (5 minutes)
+# Option A: Wait for auto-polling (2 minutes)
 # Option B: Trigger manually in Jenkins UI (faster)
 ```
 

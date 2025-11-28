@@ -2,8 +2,9 @@
 
 ###############################################################################
 # DevOps Interview Toolkit - Cleanup Script
-# Removes all toolkit-generated artifacts for fresh testing/debugging
-# NOTE: Does NOT remove installed software (Docker, kubectl, minikube, PHP, Git)
+# Two modes:
+#   ./cleanup.sh        - Remove stale resources (fast re-setup)
+#   ./cleanup.sh --full - Complete wipe (including base images & network)
 ###############################################################################
 
 set -e
@@ -19,20 +20,60 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Parse arguments
+FULL_CLEANUP=false
+if [[ "$1" == "--full" ]]; then
+    FULL_CLEANUP=true
+fi
+
+# Display mode
 echo ""
 echo "=========================================="
-echo "  DevOps Toolkit Cleanup"
+if [[ "$FULL_CLEANUP" == "true" ]]; then
+    echo "  DevOps Toolkit Cleanup (FULL MODE)"
+else
+    echo "  DevOps Toolkit Cleanup (DEFAULT MODE)"
+fi
 echo "=========================================="
 echo ""
-log_info "Removing:"
-echo "  • Jenkins container and data volume"
-echo "  • minikube cluster and data"
-echo "  • Docker images built by toolkit"
-echo "  • Generated files (Dockerfile, Jenkinsfile, k8s/, .env.interview)"
+
+if [[ "$FULL_CLEANUP" == "true" ]]; then
+    log_warning "FULL CLEANUP MODE - Everything will be removed!"
+    echo ""
+    log_info "Removing:"
+    echo "  • Jenkins & GitLab containers + volumes"
+    echo "  • minikube cluster"
+    echo "  • Custom Docker network (gitlab-jenkins-network)"
+    echo "  • ALL Docker images (including base images)"
+    echo "  • Generated files"
+    echo ""
+    log_info "Preserving:"
+    echo "  • Installed software (Docker, kubectl, minikube, PHP, Git)"
+else
+    log_info "DEFAULT CLEANUP MODE - Removes stale resources only"
+    echo ""
+    log_info "Removing:"
+    echo "  • Jenkins & GitLab containers + volumes (fresh start)"
+    echo "  • minikube cluster"
+    echo "  • Toolkit-built Docker images"
+    echo "  • Generated files"
+    echo ""
+    log_info "Preserving:"
+    echo "  • Installed software (Docker, kubectl, minikube, PHP, Git)"
+    echo "  • Custom network (gitlab-jenkins-network) - faster re-setup"
+    echo "  • Base images (gitlab/gitlab-ce, jenkins/jenkins, php:*) - faster re-setup"
+    echo ""
+    log_info "For complete wipe, use: ./cleanup.sh --full"
+fi
+
 echo ""
-log_info "Preserving:"
-echo "  • Installed software (Docker, kubectl, minikube, PHP, Git)"
-echo "  • Base images (jenkins/jenkins:lts, php:*, etc.)"
+read -p "Continue? [Y/n]: " CONFIRM
+CONFIRM=${CONFIRM:-Y}
+if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+    log_warning "Cleanup cancelled"
+    exit 0
+fi
+
 echo ""
 log_info "Starting cleanup..."
 
@@ -57,50 +98,115 @@ else
     log_info "No Jenkins container found"
 fi
 
-# 2. Remove Jenkins volume
+# 2. Remove Jenkins volume (ALWAYS in both modes - fresh start)
 if docker volume ls | grep -q jenkins_home; then
     log_info "Removing Jenkins data volume..."
     docker volume rm jenkins_home 2>/dev/null || true
-    log_success "Jenkins volume removed"
+    log_success "Jenkins volume removed (fresh Jenkins on next setup)"
 else
     log_info "No Jenkins volume found"
 fi
 
-# 3. Clean up Docker images from minikube BEFORE deleting cluster
+# 3. Clean up GitLab
+echo ""
+log_info "Cleaning up GitLab..."
+
+if docker ps -a | grep -q gitlab; then
+    log_info "Stopping GitLab container..."
+    docker stop gitlab 2>/dev/null || true
+    log_info "Removing GitLab container..."
+    docker rm gitlab 2>/dev/null || true
+    log_success "GitLab container removed"
+else
+    log_info "No GitLab container found"
+fi
+
+# Remove GitLab volumes (ALWAYS in both modes - fresh start)
+GITLAB_VOLUMES=$(docker volume ls | grep -E "gitlab_(config|logs|data)" | awk '{print $2}')
+if [ -n "$GITLAB_VOLUMES" ]; then
+    log_info "Removing GitLab data volumes (config, logs, data)..."
+    echo "$GITLAB_VOLUMES" | xargs -r docker volume rm 2>/dev/null || true
+    log_success "GitLab volumes removed (fresh GitLab on next setup)"
+else
+    log_info "No GitLab volumes found"
+fi
+
+# 4. Remove custom network (ONLY in --full mode)
+if [[ "$FULL_CLEANUP" == "true" ]]; then
+    if docker network ls | grep -q gitlab-jenkins-network; then
+        log_info "Removing gitlab-jenkins-network..."
+        docker network rm gitlab-jenkins-network 2>/dev/null || true
+        log_success "Custom network removed"
+    else
+        log_info "No gitlab-jenkins-network found"
+    fi
+else
+    if docker network ls | grep -q gitlab-jenkins-network; then
+        log_info "Keeping gitlab-jenkins-network (faster re-setup)"
+    fi
+fi
+
+# 5. Clean up Docker images
+echo ""
 log_info "Cleaning up Docker images..."
 
-# Clean up images from HOST Docker first
-IMAGES_TO_REMOVE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "localhost:5000/|automation-toolkit|test-|php-app|demo-" || true)
+if [[ "$FULL_CLEANUP" == "true" ]]; then
+    # FULL MODE: Remove ALL images
+    log_warning "Removing ALL Docker images (including base images)..."
 
-if [ -n "$IMAGES_TO_REMOVE" ]; then
-    log_info "Removing toolkit-generated images from host Docker..."
-    echo "$IMAGES_TO_REMOVE" | xargs -r docker rmi -f 2>/dev/null || true
-    log_success "Host Docker images removed"
-else
-    log_info "No toolkit-generated images found in host Docker"
-fi
-
-# Clean up images from MINIKUBE Docker (BEFORE deleting cluster!)
-if command -v minikube >/dev/null 2>&1 && minikube status >/dev/null 2>&1; then
-    log_info "Cleaning up images from minikube Docker (before cluster deletion)..."
-
-    # Switch to minikube Docker context and remove images
-    eval $(minikube docker-env) 2>/dev/null || true
-    MINIKUBE_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "localhost:5000/|automation-toolkit" || true)
-
-    if [ -n "$MINIKUBE_IMAGES" ]; then
-        log_info "Removing toolkit images from minikube Docker..."
-        echo "$MINIKUBE_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
-        log_success "Minikube Docker images removed"
+    # Clean from HOST Docker
+    ALL_IMAGES=$(docker images -q)
+    if [ -n "$ALL_IMAGES" ]; then
+        log_info "Removing all images from host Docker..."
+        docker rmi -f $(docker images -q) 2>/dev/null || true
+        log_success "All host Docker images removed"
     else
-        log_info "No toolkit images found in minikube Docker"
+        log_info "No images found in host Docker"
     fi
 
-    # Reset to host Docker context
-    eval $(minikube docker-env -u) 2>/dev/null || true
+    # Clean from MINIKUBE Docker (before deleting cluster)
+    if command -v minikube >/dev/null 2>&1 && minikube status >/dev/null 2>&1; then
+        log_info "Removing all images from minikube Docker..."
+        eval $(minikube docker-env) 2>/dev/null || true
+        MINIKUBE_ALL_IMAGES=$(docker images -q)
+        if [ -n "$MINIKUBE_ALL_IMAGES" ]; then
+            docker rmi -f $(docker images -q) 2>/dev/null || true
+            log_success "All minikube Docker images removed"
+        fi
+        eval $(minikube docker-env -u) 2>/dev/null || true
+    fi
+else
+    # DEFAULT MODE: Remove ONLY toolkit-built images
+    log_info "Removing toolkit-built images only..."
+
+    # Clean from HOST Docker
+    IMAGES_TO_REMOVE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "localhost:5000/|automation-toolkit|test-|php-app|demo-|^<none>" || true)
+    if [ -n "$IMAGES_TO_REMOVE" ]; then
+        log_info "Removing toolkit-generated images from host Docker..."
+        echo "$IMAGES_TO_REMOVE" | xargs -r docker rmi -f 2>/dev/null || true
+        log_success "Toolkit images removed from host Docker"
+    else
+        log_info "No toolkit-generated images found in host Docker"
+    fi
+
+    # Clean from MINIKUBE Docker (before deleting cluster)
+    if command -v minikube >/dev/null 2>&1 && minikube status >/dev/null 2>&1; then
+        log_info "Removing toolkit images from minikube Docker..."
+        eval $(minikube docker-env) 2>/dev/null || true
+        MINIKUBE_IMAGES=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "localhost:5000/|automation-toolkit|test-|php-app|demo-|^<none>" || true)
+        if [ -n "$MINIKUBE_IMAGES" ]; then
+            echo "$MINIKUBE_IMAGES" | xargs -r docker rmi -f 2>/dev/null || true
+            log_success "Toolkit images removed from minikube Docker"
+        else
+            log_info "No toolkit images found in minikube Docker"
+        fi
+        eval $(minikube docker-env -u) 2>/dev/null || true
+    fi
+
+    log_info "Keeping base images (gitlab/gitlab-ce, jenkins/jenkins, php:*)"
 fi
 
-# 4. Delete minikube cluster and configuration (AFTER cleaning images)
+# 6. Delete minikube cluster and configuration
 echo ""
 log_info "Cleaning up minikube..."
 if command -v minikube >/dev/null 2>&1; then
@@ -140,13 +246,17 @@ else
     log_info "minikube not installed (skipping)"
 fi
 
-# 5. Docker system prune (dangling images, stopped containers, unused networks)
+# 7. Docker system prune (ONLY in --full mode)
 echo ""
-log_info "Running Docker system prune..."
-docker system prune -f
-log_success "Docker system pruned"
+if [[ "$FULL_CLEANUP" == "true" ]]; then
+    log_info "Running Docker system prune (--full mode)..."
+    docker system prune -f
+    log_success "Docker system pruned"
+else
+    log_info "Skipping Docker system prune (use --full for complete cleanup)"
+fi
 
-# 6. Clean up generated files in current directory (if in a project)
+# 8. Clean up generated files in current directory
 echo ""
 log_info "Checking for generated files in current directory..."
 
@@ -168,7 +278,7 @@ else
     log_info "No generated files found in current directory"
 fi
 
-# 7. Clean up init scripts (if running from toolkit directory)
+# 9. Clean up init scripts temp files
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -d "/tmp/jenkins-init-scripts" ]; then
     log_info "Removing temporary Jenkins init scripts..."
@@ -176,31 +286,48 @@ if [ -d "/tmp/jenkins-init-scripts" ]; then
     log_success "Temp files removed"
 fi
 
-# 8. Clean up .env.interview in toolkit directory
+# 10. Clean up .env.interview in toolkit directory
 if [ -f "${SCRIPT_DIR}/.env.interview" ]; then
     log_info "Removing .env.interview from toolkit directory..."
     rm -f "${SCRIPT_DIR}/.env.interview"
     log_success ".env.interview removed"
 fi
 
+# Summary
 echo ""
 echo "=========================================="
 log_success "Cleanup Complete!"
 echo "=========================================="
 echo ""
-log_info "What was cleaned:"
-echo "  ✓ Jenkins container and data"
-echo "  ✓ minikube cluster (if existed)"
-echo "  ✓ Docker images (if confirmed)"
-echo "  ✓ Generated files (if confirmed)"
-echo ""
-log_info "What was preserved:"
-echo "  ✓ Docker installation"
-echo "  ✓ kubectl binary"
-echo "  ✓ minikube binary"
-echo "  ✓ PHP installation"
-echo "  ✓ Git installation"
-echo "  ✓ Base Docker images (jenkins/jenkins:lts, php:*, etc.)"
+
+if [[ "$FULL_CLEANUP" == "true" ]]; then
+    log_info "FULL CLEANUP - What was removed:"
+    echo "  ✓ Jenkins & GitLab containers + volumes"
+    echo "  ✓ Custom Docker network (gitlab-jenkins-network)"
+    echo "  ✓ minikube cluster"
+    echo "  ✓ ALL Docker images (including base images)"
+    echo "  ✓ Generated files"
+    echo "  ✓ Docker system pruned"
+    echo ""
+    log_info "What was preserved:"
+    echo "  ✓ Installed software (Docker, kubectl, minikube, PHP, Git)"
+    echo ""
+    log_warning "Next setup will download all base images (~2GB)"
+else
+    log_info "DEFAULT CLEANUP - What was removed:"
+    echo "  ✓ Jenkins & GitLab containers + volumes (fresh start)"
+    echo "  ✓ minikube cluster"
+    echo "  ✓ Toolkit-built Docker images"
+    echo "  ✓ Generated files"
+    echo ""
+    log_info "What was preserved:"
+    echo "  ✓ Installed software (Docker, kubectl, minikube, PHP, Git)"
+    echo "  ✓ Custom network (gitlab-jenkins-network) - re-used on next setup"
+    echo "  ✓ Base images (gitlab/gitlab-ce, jenkins/jenkins, php:*) - faster re-setup"
+    echo ""
+    log_info "For complete wipe: ./cleanup.sh --full"
+fi
+
 echo ""
 log_info "To start fresh:"
 echo "  1. Run: ./1-infra-setup.sh"

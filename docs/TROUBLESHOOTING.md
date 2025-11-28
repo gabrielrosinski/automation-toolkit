@@ -175,6 +175,109 @@ nproc      # CPUs
 
 ---
 
+### GitLab Container Initialization Timeout
+
+**Symptom:** GitLab container starts but health check fails after 5 minutes
+
+**Root Cause:** GitLab CE initialization takes 3-10 minutes on first boot depending on system resources (CPU, memory, disk I/O). The default 5-minute timeout may be insufficient on slower systems.
+
+**Immediate Solution:**
+```bash
+# Wait longer - GitLab may still be initializing
+# Check logs to monitor progress
+docker logs -f gitlab
+
+# Look for: "gitlab Reconfigured!" (initialization complete)
+# Then manually check health
+curl http://localhost:8090/-/health
+# Expected: {"status":"ok"}
+```
+
+**Check Progress:**
+```bash
+# Use helper script
+./helpers/gitlab-helpers.sh logs-live
+# Watch for "gitlab Reconfigured!" message
+
+# Or check status
+./helpers/gitlab-helpers.sh status
+./helpers/gitlab-helpers.sh health
+```
+
+**If GitLab Still Fails After 10 Minutes:**
+```bash
+# Check container resources
+docker stats gitlab
+
+# Restart GitLab container
+docker restart gitlab
+
+# Or redeploy from scratch
+docker stop gitlab && docker rm gitlab
+docker volume rm gitlab_config gitlab_logs gitlab_data
+./gitlab-init-scripts/deploy-gitlab.sh
+```
+
+**Permanent Fix (Increase Timeout):**
+Edit `gitlab-init-scripts/deploy-gitlab.sh` and change:
+```bash
+# From:
+local max_attempts=60  # 60 × 5 seconds = 5 minutes
+
+# To:
+local max_attempts=120  # 120 × 5 seconds = 10 minutes
+```
+
+---
+
+### GitLab Container Fails to Start
+
+**Symptom:** GitLab container exits immediately or won't stay running
+
+**Check logs:**
+```bash
+docker logs gitlab
+```
+
+**Common Causes:**
+
+**Port 8090 Already in Use:**
+```bash
+# Check what's using port 8090
+sudo lsof -i :8090
+sudo netstat -tulpn | grep 8090
+
+# Kill conflicting process
+sudo kill -9 <PID>
+
+# Or change GitLab port in deploy-gitlab.sh
+# Change -p 0.0.0.0:8090:80 to -p 0.0.0.0:8091:80
+```
+
+**Insufficient Resources:**
+```bash
+# GitLab needs at least 4GB RAM
+free -h
+
+# Check container limits
+docker stats gitlab
+
+# If system has <8GB RAM, may struggle with GitLab + Jenkins + minikube
+# Consider: Only run what you need for interview
+```
+
+**Volume Permission Issues:**
+```bash
+# Remove and recreate volumes
+docker stop gitlab && docker rm gitlab
+docker volume rm gitlab_config gitlab_logs gitlab_data
+
+# Redeploy
+./gitlab-init-scripts/deploy-gitlab.sh
+```
+
+---
+
 ### Jenkins Container Fails to Start
 
 **Symptom:** Jenkins container exits immediately
@@ -481,9 +584,58 @@ curl http://localhost:8080
 
 ---
 
-### Jenkins Can't Connect to GitLab
+### Jenkins Can't Connect to Local GitLab
 
-**Symptom:** Pipeline fails at checkout stage
+**Symptom:** Pipeline fails at checkout stage with connection refused or hostname not found
+
+**Root Cause:** Jenkins and GitLab containers aren't on the same Docker network, or URL translation not applied.
+
+**Diagnosis:**
+```bash
+# 1. Check both containers are on gitlab-jenkins-network
+docker network inspect gitlab-jenkins-network
+# Should show both gitlab and jenkins containers
+
+# 2. Test DNS resolution from Jenkins
+docker exec jenkins ping -c 1 gitlab
+# Should resolve to GitLab container IP
+
+# 3. Test HTTP connectivity
+docker exec jenkins curl -v http://gitlab:80/-/health
+# Should return HTTP 200
+
+# 4. Use helper script for full test
+./helpers/gitlab-helpers.sh test
+```
+
+**Fix - Reconnect to Network:**
+```bash
+# Reconnect both containers to network
+docker network connect gitlab-jenkins-network gitlab
+docker network connect gitlab-jenkins-network jenkins
+
+# Verify
+docker network inspect gitlab-jenkins-network
+```
+
+**Fix - Verify Jenkinsfile URL:**
+```bash
+# Check Jenkinsfile uses correct URL
+cat Jenkinsfile | grep GIT_REPO
+
+# For local GitLab, should show:
+# GIT_REPO = "http://gitlab:80/root/project.git"
+# NOT: "http://localhost:8090/root/project.git"
+
+# If wrong, regenerate with:
+../2-generate-project.sh
+```
+
+---
+
+### Jenkins Can't Connect to External GitLab
+
+**Symptom:** Pipeline fails at checkout stage for external GitLab server
 
 **Check Credentials:**
 ```bash
@@ -491,17 +643,31 @@ curl http://localhost:8080
 # Manage Jenkins → Manage Credentials
 # Verify gitlab-creds exists and is correct
 
-# Test Git access manually:
+# Test Git access manually from host:
 git clone <gitlab-url>  # From terminal
+
+# Test from Jenkins container:
+docker exec jenkins git clone <gitlab-url> /tmp/test-clone
 ```
 
-**Network Issues:**
+**Network/Firewall Issues:**
 ```bash
 # Test from Jenkins container
-docker exec jenkins curl <gitlab-url>
+docker exec jenkins curl -v <gitlab-url>
 
-# If fails, check network connectivity
+# If fails with connection refused:
+# - Check firewall rules
+# - Check GitLab server is accessible from Docker network
+# - Try using IP address instead of hostname
 ```
+
+**SSL Certificate Issues:**
+```bash
+# If HTTPS fails with certificate errors
+docker exec jenkins git config --global http.sslVerify false
+
+# Better: Add CA certificate to Jenkins
+# (Not recommended for production)
 
 ---
 
@@ -629,9 +795,99 @@ RUN docker-php-ext-install pdo_mysql mysqli gd xml
 
 ## 🌐 Network Issues
 
-### Can't Clone from GitLab
+### Can't Access GitLab Web UI
 
-**Symptom:** `git clone` fails
+**Symptom:** Cannot open http://localhost:8090 in browser
+
+**Check Container Status:**
+```bash
+# Verify GitLab is running
+docker ps | grep gitlab
+# Should show: 0.0.0.0:8090->80/tcp
+
+# If not running:
+docker start gitlab
+
+# Check health
+curl http://localhost:8090/-/health
+```
+
+**Still Initializing:**
+```bash
+# GitLab may still be starting (first boot takes 3-10 min)
+docker logs gitlab | tail -50
+# Look for "gitlab Reconfigured!" message
+
+# Wait and retry
+./helpers/gitlab-helpers.sh logs-live
+```
+
+**Port Conflict:**
+```bash
+# Check if another service is using 8090
+sudo lsof -i :8090
+sudo netstat -tulpn | grep 8090
+
+# If conflict, either:
+# 1. Stop conflicting service
+# 2. Change GitLab port in gitlab-init-scripts/deploy-gitlab.sh
+```
+
+**Browser Issues:**
+```bash
+# Try different browser
+# Try private/incognito mode
+# Clear browser cache
+
+# Test with curl to verify it's working
+curl http://localhost:8090
+```
+
+---
+
+### Can't Clone from Local GitLab
+
+**Symptom:** `git clone http://localhost:8090/root/project.git` fails
+
+**Check GitLab is Ready:**
+```bash
+# Verify health
+curl http://localhost:8090/-/health
+# Should return: {"status":"ok"}
+
+# If not ready, wait for initialization
+./helpers/gitlab-helpers.sh status
+```
+
+**Authentication Issues:**
+```bash
+# HTTP clone requires credentials
+git clone http://localhost:8090/root/project.git
+# Username: root
+# Password: interview2024
+
+# Or embed credentials (not recommended, but works)
+git clone http://root:interview2024@localhost:8090/root/project.git
+```
+
+**Use SSH Instead:**
+```bash
+# Generate SSH key if needed
+ssh-keygen -t ed25519 -C "you@example.com"
+
+# Add key to GitLab
+cat ~/.ssh/id_ed25519.pub
+# Copy and paste to GitLab: User Settings → SSH Keys
+
+# Clone with SSH (port 8022, not default 22)
+git clone ssh://git@localhost:8022/root/project.git
+```
+
+---
+
+### Can't Clone from External GitLab
+
+**Symptom:** `git clone` fails for external GitLab server
 
 **Check URL:**
 ```bash
@@ -724,12 +980,27 @@ which php
 If everything is broken, nuclear option:
 
 ```bash
-# Stop and remove everything
+# USE CLEANUP SCRIPT (Recommended)
+./cleanup.sh --full
+# Removes everything including base images
+# Then re-run setup
+./1-infra-setup.sh
+
+# OR MANUAL RESET
+# Stop and remove all containers
 docker stop $(docker ps -aq)
 docker rm $(docker ps -aq)
+
+# Delete minikube
 minikube delete
 
-# Clean Docker
+# Remove volumes
+docker volume rm gitlab_config gitlab_logs gitlab_data jenkins_home
+
+# Remove network
+docker network rm gitlab-jenkins-network
+
+# Clean Docker (removes all images, use with caution!)
 docker system prune -a -f
 
 # Re-run setup
@@ -746,18 +1017,46 @@ Run this to check all components:
 echo "=== Docker ==="
 docker ps
 
+echo ""
+echo "=== GitLab ==="
+docker ps | grep gitlab
+curl -s http://localhost:8090/-/health 2>/dev/null || echo "GitLab not responding"
+echo ""
+
+echo "=== Jenkins ==="
+docker ps | grep jenkins
+curl -s -o /dev/null -w "HTTP Status: %{http_code}" http://localhost:8080
+echo ""
+
+echo ""
+echo "=== GitLab-Jenkins Network ==="
+docker network inspect gitlab-jenkins-network | grep -E "(gitlab|jenkins)" || echo "Network not configured"
+echo ""
+
 echo "=== Minikube ==="
 minikube status
 
+echo ""
 echo "=== Kubectl ==="
 kubectl get nodes
 
-echo "=== Jenkins ==="
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8080
 echo ""
-
 echo "=== PHP ==="
 php --version
+
+echo ""
+echo "=== Helper Scripts ==="
+ls -1 helpers/gitlab-helpers.sh helpers/create-jenkins-job.sh 2>/dev/null || echo "Helper scripts missing"
+```
+
+**Automated Health Check (Use Helper Scripts):**
+```bash
+# GitLab health check
+./helpers/gitlab-helpers.sh status
+./helpers/gitlab-helpers.sh health
+
+# GitLab-Jenkins connectivity test
+./helpers/gitlab-helpers.sh test
 ```
 
 ---

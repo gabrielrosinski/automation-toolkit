@@ -616,7 +616,34 @@ validate_installation() {
         log_info "Run: docker ps -a | grep jenkins"
         all_ok=false
     fi
-    
+
+    # Check GitLab (optional component)
+    if docker ps --filter "name=gitlab" --format "{{.Names}}" | grep -q "^gitlab$"; then
+        log_info "Checking GitLab health..."
+        sleep 2
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            http://localhost:8090/-/health 2>/dev/null || echo "000")
+        if [[ "$HTTP_CODE" == "200" ]]; then
+            log_success "✓ GitLab is running and healthy (HTTP $HTTP_CODE)"
+
+            # Verify Jenkins can reach GitLab (if both exist)
+            if docker ps --filter "name=jenkins" --format "{{.Names}}" | grep -q "^jenkins$"; then
+                if docker exec jenkins curl -s http://gitlab:8090/-/health >/dev/null 2>&1; then
+                    log_success "✓ Jenkins → GitLab connectivity verified"
+                else
+                    log_warning "⚠ Jenkins cannot reach GitLab (network issue)"
+                    log_info "  Run: docker network inspect gitlab-jenkins-network"
+                fi
+            fi
+        else
+            log_warning "✓ GitLab container exists but still initializing (HTTP $HTTP_CODE)"
+            log_info "  GitLab may take up to 5 minutes to fully start"
+            log_info "  Check with: curl http://localhost:8090/-/health"
+        fi
+    else
+        log_info "○ GitLab not deployed (will use external GitLab)"
+    fi
+
     # Check PHP
     if command_exists php; then
         log_success "✓ PHP is installed"
@@ -645,17 +672,29 @@ validate_installation() {
 # Save environment info
 save_env_info() {
     log_info "Saving environment information..."
-    
+
+    GITLAB_STATUS="not-deployed"
+    if docker ps | grep -q gitlab; then
+        GITLAB_STATUS="http://localhost:8090"
+    fi
+
     cat > .env.interview << EOF
 # DevOps Interview Environment Info
 # Generated: $(date)
 
 MINIKUBE_IP=$(minikube ip 2>/dev/null || echo "not-started")
 JENKINS_URL=http://localhost:8080
+GITLAB_URL=${GITLAB_STATUS}
 
-# Docker is configured to use minikube's Docker daemon
-# This was done automatically during setup with: eval \$(minikube docker-env)
-# Jenkins runs in HOST Docker and remains accessible at localhost:8080
+# Docker Configuration:
+# - Jenkins and GitLab run in HOST Docker
+# - App images built in minikube Docker (via: eval \$(minikube docker-env))
+# - Custom network: gitlab-jenkins-network (Jenkins → GitLab communication)
+
+# GitLab Access:
+# - Browser: http://localhost:8090
+# - Jenkins: http://gitlab:8090 (container name DNS)
+# - Credentials: root / interview2024
 
 # Minikube registry:
 # REGISTRY=localhost:5000
@@ -663,7 +702,7 @@ JENKINS_URL=http://localhost:8080
 # To switch back to host Docker (if needed):
 # eval \$(minikube docker-env --unset)
 EOF
-    
+
     log_success "Environment info saved to .env.interview"
 }
 
@@ -686,9 +725,27 @@ main() {
     install_git
     
     echo ""
-    
+
     # Start infrastructure
     start_minikube
+
+    echo ""
+
+    # Deploy GitLab FIRST (takes 3-5 min - do it early!)
+    log_info "Deploying GitLab CE (initialization takes 3-5 minutes)..."
+    if ! bash "$(dirname "${BASH_SOURCE[0]}")/gitlab-init-scripts/deploy-gitlab.sh"; then
+        log_error "GitLab deployment failed!"
+        log_info "You can skip GitLab and use external GitLab server instead."
+        read -p "Continue without GitLab? [Y/n]: " SKIP_GITLAB
+        if [[ ! "$SKIP_GITLAB" =~ ^[Yy]?$ ]]; then
+            exit 1
+        fi
+        GITLAB_DEPLOYED=false
+    else
+        GITLAB_DEPLOYED=true
+    fi
+
+    echo ""
 
     # Deploy Jenkins using separate script
     # Jenkins runs in HOST Docker (not minikube's Docker)
@@ -697,6 +754,24 @@ main() {
         log_error "Jenkins deployment failed! Setup cannot continue."
         log_info "Please check the errors above and retry."
         exit 1
+    fi
+
+    # Create network bridge for GitLab <-> Jenkins (if both exist)
+    if [[ "$GITLAB_DEPLOYED" == "true" ]]; then
+        echo ""
+        log_info "Connecting Jenkins and GitLab containers..."
+        docker network create gitlab-jenkins-network 2>/dev/null || true
+        docker network connect gitlab-jenkins-network gitlab 2>/dev/null || true
+        docker network connect gitlab-jenkins-network jenkins 2>/dev/null || true
+
+        # Verify connectivity
+        sleep 2
+        if docker exec jenkins curl -s http://gitlab:8090/-/health >/dev/null 2>&1; then
+            log_success "Jenkins can reach GitLab at http://gitlab:8090"
+        else
+            log_warning "Jenkins → GitLab connectivity check failed (may need time)"
+            log_info "Connectivity will be tested again during validation"
+        fi
     fi
 
     echo ""
@@ -722,12 +797,21 @@ main() {
     echo ""
 
     echo "Next steps:"
-    echo "1. Access Jenkins at http://localhost:8080 (admin / admin)"
-    echo "2. Clone your Git repository"
-    echo "3. Run: ./2-generate-project.sh (generates Jenkinsfile, Dockerfile, K8s manifests)"
-    echo "4. Script will prompt to auto-create Jenkins pipeline job"
-    echo "5. Push generated files to your repository"
-    echo "6. Jenkins will auto-build when changes are detected"
+    if [[ "$GITLAB_DEPLOYED" == "true" ]]; then
+        echo "1. Access GitLab at http://localhost:8090 (root / interview2024)"
+        echo "2. Create a new project in GitLab (see WORKFLOWS.md)"
+        echo "3. Access Jenkins at http://localhost:8080 (admin / admin)"
+        echo "4. Clone or initialize your Git repository"
+        echo "5. Run: ./2-generate-project.sh (generates Jenkinsfile, Dockerfile, K8s manifests)"
+        echo "6. Push to GitLab - Jenkins will auto-build when changes are detected"
+    else
+        echo "1. Access Jenkins at http://localhost:8080 (admin / admin)"
+        echo "2. Clone your Git repository (from external GitLab)"
+        echo "3. Run: ./2-generate-project.sh (generates Jenkinsfile, Dockerfile, K8s manifests)"
+        echo "4. Script will prompt to auto-create Jenkins pipeline job"
+        echo "5. Push generated files to your repository"
+        echo "6. Jenkins will auto-build when changes are detected"
+    fi
     echo ""
     echo "Useful commands:"
     echo "  minikube status                  - Check cluster status"

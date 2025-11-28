@@ -33,6 +33,20 @@ sed_inplace() {
     fi
 }
 
+# Translate GitLab URL for Jenkins container access
+# Converts localhost:8090 → gitlab:80 (container internal port)
+# Note: Host port 8090 maps to container port 80 internally
+translate_gitlab_url_for_jenkins() {
+    local url="$1"
+    # If URL uses localhost:8090, replace with gitlab:80 for Jenkins
+    if [[ "$url" =~ localhost:8090 ]]; then
+        echo "$url" | sed 's|localhost:8090|gitlab:80|g'
+    else
+        # External GitLab - no translation needed
+        echo "$url"
+    fi
+}
+
 # Input validation functions
 validate_k8s_name() {
     local name="$1"
@@ -80,17 +94,70 @@ echo ""
 echo "Please provide the following information:"
 echo ""
 
-# Prompt for GitLab repository URL
-while true; do
-    read -p "GitLab repository URL (e.g., https://gitlab.company.local/team/php-app): " GITLAB_URL
-    if [[ -z "$GITLAB_URL" ]]; then
-        log_error "GitLab URL is required!"
-        continue
+# Check if local GitLab is running
+LOCAL_GITLAB_RUNNING=false
+if docker ps 2>/dev/null | grep -q gitlab; then
+    LOCAL_GITLAB_RUNNING=true
+    log_info "Local GitLab detected at http://localhost:8090"
+fi
+
+# Prompt for GitLab configuration
+echo ""
+log_info "GitLab Configuration"
+
+if [[ "$LOCAL_GITLAB_RUNNING" == "true" ]]; then
+    echo "Local GitLab is available at: http://localhost:8090"
+    read -p "Use local GitLab? [Y/n]: " USE_LOCAL_GITLAB
+    USE_LOCAL_GITLAB=${USE_LOCAL_GITLAB:-Y}
+
+    if [[ "$USE_LOCAL_GITLAB" =~ ^[Yy]$ ]]; then
+        echo ""
+        log_info "Enter GitLab project path (format: username/project-name)"
+        read -p "GitLab project path (e.g., root/my-app): " GITLAB_PROJECT_PATH
+
+        if [[ -z "$GITLAB_PROJECT_PATH" ]]; then
+            log_error "Project path is required!"
+            exit 1
+        fi
+
+        # Build GitLab URL
+        GITLAB_URL="http://localhost:8090/${GITLAB_PROJECT_PATH}.git"
+        log_success "Using: $GITLAB_URL"
+
+        # Set default credentials for local GitLab
+        GITLAB_USERNAME_DEFAULT="root"
+        GITLAB_TOKEN_DEFAULT="interview2024"
+    else
+        # Use external GitLab
+        while true; do
+            read -p "External GitLab URL: " GITLAB_URL
+            if [[ -z "$GITLAB_URL" ]]; then
+                log_error "GitLab URL is required!"
+                continue
+            fi
+            if validate_url "$GITLAB_URL"; then
+                break
+            fi
+        done
+        GITLAB_USERNAME_DEFAULT=""
+        GITLAB_TOKEN_DEFAULT=""
     fi
-    if validate_url "$GITLAB_URL"; then
-        break
-    fi
-done
+else
+    # No local GitLab - must use external
+    log_info "No local GitLab detected. Using external GitLab."
+    while true; do
+        read -p "GitLab repository URL (e.g., https://gitlab.company.local/team/app): " GITLAB_URL
+        if [[ -z "$GITLAB_URL" ]]; then
+            log_error "GitLab URL is required!"
+            continue
+        fi
+        if validate_url "$GITLAB_URL"; then
+            break
+        fi
+    done
+    GITLAB_USERNAME_DEFAULT=""
+    GITLAB_TOKEN_DEFAULT=""
+fi
 
 # Extract repo name from URL
 REPO_NAME=$(basename "$GITLAB_URL" .git)
@@ -99,14 +166,28 @@ log_info "Repository name: $REPO_NAME"
 # Prompt for GitLab credentials
 echo ""
 log_info "GitLab credentials (for Jenkins CI/CD automation)"
-read -p "GitLab username: " GITLAB_USERNAME
+
+if [[ -n "$GITLAB_USERNAME_DEFAULT" ]]; then
+    read -p "GitLab username [$GITLAB_USERNAME_DEFAULT]: " GITLAB_USERNAME
+    GITLAB_USERNAME=${GITLAB_USERNAME:-$GITLAB_USERNAME_DEFAULT}
+else
+    read -p "GitLab username: " GITLAB_USERNAME
+fi
+
 if [[ -z "$GITLAB_USERNAME" ]]; then
     log_error "GitLab username is required!"
     exit 1
 fi
 
-read -sp "GitLab password or personal access token: " GITLAB_TOKEN
-echo ""
+if [[ -n "$GITLAB_TOKEN_DEFAULT" ]]; then
+    read -sp "GitLab password or token [$GITLAB_TOKEN_DEFAULT]: " GITLAB_TOKEN
+    echo ""
+    GITLAB_TOKEN=${GITLAB_TOKEN:-$GITLAB_TOKEN_DEFAULT}
+else
+    read -sp "GitLab password or personal access token: " GITLAB_TOKEN
+    echo ""
+fi
+
 if [[ -z "$GITLAB_TOKEN" ]]; then
     log_error "GitLab password/token is required!"
     exit 1
@@ -201,6 +282,7 @@ cat > .env.interview <<EOF
 # WARNING: This file contains sensitive credentials - DO NOT commit to Git!
 
 GITLAB_URL=${GITLAB_URL}
+GITLAB_URL_JENKINS=$(translate_gitlab_url_for_jenkins "$GITLAB_URL")
 GITLAB_USERNAME=${GITLAB_USERNAME}
 GITLAB_TOKEN=${GITLAB_TOKEN}
 APP_NAME=${APP_NAME}
@@ -208,7 +290,10 @@ APP_PORT=${APP_PORT}
 K8S_NAMESPACE=${K8S_NAMESPACE}
 GIT_BRANCH=${GIT_BRANCH}
 PHP_VERSION=${PHP_VERSION}
-DOCKER_REGISTRY=${DOCKER_REGISTRY}
+
+# URL Notes:
+# - GITLAB_URL: For user (git clone, browser) - uses localhost:8090
+# - GITLAB_URL_JENKINS: For Jenkins pipelines - uses gitlab:80 (container internal port)
 EOF
 
 # Add to .gitignore if not already there
@@ -245,13 +330,20 @@ process_template() {
     log_info "Generating $description from template..."
     cp "$template_file" "$output_file"
 
+    # For Jenkinsfile, use translated URL (Jenkins needs container name)
+    local git_repo_url="$GITLAB_URL"
+    if [[ "$output_file" == "Jenkinsfile" ]]; then
+        git_repo_url=$(translate_gitlab_url_for_jenkins "$GITLAB_URL")
+        log_info "Jenkins will use: $git_repo_url"
+    fi
+
     # Replace all placeholders with actual values
     sed_inplace "s|{{APP_NAME}}|${APP_NAME}|g" "$output_file"
     sed_inplace "s|{{IMAGE_NAME}}|${IMAGE_NAME}|g" "$output_file"
     sed_inplace "s|{{APP_PORT}}|${APP_PORT}|g" "$output_file"
     sed_inplace "s|{{K8S_NAMESPACE}}|${K8S_NAMESPACE}|g" "$output_file"
     sed_inplace "s|{{PHP_VERSION}}|${PHP_VERSION}|g" "$output_file"
-    sed_inplace "s|{{GIT_REPO}}|${GITLAB_URL}|g" "$output_file"
+    sed_inplace "s|{{GIT_REPO}}|${git_repo_url}|g" "$output_file"
     sed_inplace "s|{{GIT_BRANCH}}|${GIT_BRANCH}|g" "$output_file"
     sed_inplace "s|{{HEALTH_CHECK_PATH}}|/|g" "$output_file"
 

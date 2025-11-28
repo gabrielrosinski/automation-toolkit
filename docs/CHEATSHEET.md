@@ -580,7 +580,7 @@ git add .
 git commit -m "Fix bug"
 git push origin main
 
-# 2. Jenkins auto-polls every 5 minutes (pre-configured!)
+# 2. Jenkins auto-polls every 2 minutes (pre-configured!)
 # Or trigger manually: http://localhost:8080/job/<app-name>-pipeline/ → Build Now
 
 # 3. Monitor in Jenkins Console Output

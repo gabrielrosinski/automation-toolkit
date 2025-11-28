@@ -35,6 +35,19 @@ fi
 
 source .env.interview
 
+# Translate GitLab URL for Jenkins (localhost:8090 → gitlab:80)
+# Note: Host uses port 8090, but GitLab container listens on port 80 internally
+if [[ "$GITLAB_URL" =~ localhost:8090 ]]; then
+    JENKINS_GITLAB_URL=$(echo "$GITLAB_URL" | sed 's|localhost:8090|gitlab:80|g')
+    log_info "Translated GitLab URL for Jenkins: $JENKINS_GITLAB_URL"
+else
+    # External GitLab - no translation needed
+    JENKINS_GITLAB_URL="$GITLAB_URL"
+fi
+
+log_info "User GitLab URL: $GITLAB_URL"
+log_info "Jenkins GitLab URL: $JENKINS_GITLAB_URL"
+
 # Verify Jenkins is running (in HOST Docker, not minikube)
 log_info "Checking Jenkins status..."
 
@@ -135,9 +148,10 @@ create_pipeline_job() {
     fi
 
     # Process template with variable substitution
+    # Use translated URL for Jenkins (gitlab:8090 instead of localhost:8090)
     cat "$TEMPLATE_FILE" | \
         sed "s|{{APP_NAME}}|${APP_NAME}|g" | \
-        sed "s|{{GITLAB_URL}}|${GITLAB_URL}|g" | \
+        sed "s|{{GITLAB_URL}}|${JENKINS_GITLAB_URL}|g" | \
         sed "s|{{GIT_BRANCH}}|${GIT_BRANCH}|g" \
         > /tmp/pipeline-config.xml
 
@@ -186,7 +200,7 @@ if [ $? -eq 0 ]; then
     echo "Job URL: http://localhost:8080/job/${APP_NAME}-pipeline/"
     echo "Login: admin / admin"
     echo ""
-    echo "The job polls GitLab every 5 minutes for changes."
+    echo "The job polls GitLab every 2 minutes for changes."
     echo ""
     echo "=========================================="
     echo "Next Steps:"
@@ -196,7 +210,7 @@ if [ $? -eq 0 ]; then
     echo "   git add ."
     echo "   git commit -m 'Fix PHP bugs'"
     echo "   git push origin ${GIT_BRANCH}"
-    echo "3. Jenkins will auto-trigger within 5 minutes"
+    echo "3. Jenkins will auto-trigger within 2 minutes"
     echo "4. Or manually trigger: http://localhost:8080/job/${APP_NAME}-pipeline/build"
     echo ""
 fi

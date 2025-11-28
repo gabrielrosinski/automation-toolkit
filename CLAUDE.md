@@ -13,13 +13,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Must complete: Tool installation → PHP debugging → Dockerfile creation → K8s deployment → Jenkins CI/CD setup
 
 **Critical Context:**
+- Self-hosted GitLab CE server now included (optional - can use external GitLab)
 - GitLab is used ONLY for Git (not CI/CD) - Jenkins handles all CI/CD
-- Jenkins runs in Docker (not K8s) for faster startup during interview
+- Both GitLab and Jenkins run in Docker (not K8s) for faster startup during interview
 - minikube chosen over kind/k3s for wider documentation/familiarity
 - Time constraint: 2-3 hours maximum
 - Designed for simplicity over production features
 
 **Recent Improvements:**
+- ✅ Self-hosted GitLab CE server with automated deployment
+- ✅ GitLab-Jenkins network bridge for seamless container communication
+- ✅ Auto-detect local GitLab vs external GitLab URLs
+- ✅ URL translation for Jenkins (localhost:8090 → gitlab:8090)
+- ✅ Two-mode cleanup: default (stale resources) vs --full (complete wipe)
 - ✅ Template-based file generation (replaces inline heredocs)
 - ✅ Jenkins automation fully separated into `jenkins-init-scripts/`
 - ✅ Single responsibility: Jenkins setup vs pipeline job creation split
@@ -36,15 +42,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Two-Script Automation System
 
 **1. Infrastructure Setup (`1-infra-setup.sh`)**
-- **Purpose:** Unattended installation of all required tools (~10-15 minutes)
+- **Purpose:** Unattended installation of all required tools (~20-25 minutes including GitLab)
 - **OS Detection:** Auto-detects WSL/Linux/macOS via `/proc/version` and `$OSTYPE`
-- **Installs:** Docker, kubectl, minikube, Jenkins (Docker container), PHP CLI, Git
+- **Installs:** Docker, kubectl, minikube, GitLab CE (Docker container), Jenkins (Docker container), PHP CLI, Git
+- **Deployment Order:** Docker → minikube → GitLab → Jenkins → network bridge
 - **Critical Functions:**
   - `detect_os()` - Sets `$OS` and `$ARCH` variables for platform-specific installs
-  - `deploy_jenkins()` - Runs Jenkins in Docker (NOT K8s), mounts Docker socket, installs Docker CLI + kubectl inside Jenkins container
+  - `deploy_gitlab()` - Runs `gitlab-init-scripts/deploy-gitlab.sh` to deploy GitLab CE in Docker
+  - `deploy_jenkins()` - Runs `jenkins-init-scripts/deploy-jenkins.sh` to deploy Jenkins in Docker
+  - `create_gitlab_jenkins_network()` - Creates custom bridge network and connects both containers
   - `start_minikube()` - Starts with `--driver=docker`, enables registry + ingress addons
   - `validate_installation()` - Checks all tools are running before exit
-- **Output:** `.env.interview` file with minikube IP, Jenkins URL, Docker host info
+- **Output:** `.env.interview` file with minikube IP, GitLab URL, Jenkins URL, Docker host info
 
 **2. Project Generator (`2-generate-project.sh`)**
 - **Purpose:** Interactive template processor for deployment files (~2 minutes)
@@ -57,6 +66,60 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - Template structure: `templates/docker/`, `templates/kubernetes/`, `templates/Jenkinsfile`
   - All templates include best practices (health checks, resource limits, proper labels)
 
+### GitLab Automation (`gitlab-init-scripts/`)
+
+**gitlab-init-scripts/deploy-gitlab.sh** - GitLab CE container deployment with **MINIMAL CONFIGURATION** for interview demos
+- Deploys GitLab CE using official Docker image (`gitlab/gitlab-ce:latest`)
+- **Minimal mode**: Disables all unnecessary enterprise/monitoring features to reduce resource usage
+- Auto-configuration via `GITLAB_OMNIBUS_CONFIG` environment variable
+- Health check monitoring with 5-minute timeout (60 retries × 5 seconds)
+- Three persistent volumes: `gitlab_config`, `gitlab_logs`, `gitlab_data`
+- Port mappings: `8090:80` (HTTP), `8022:22` (SSH)
+- Pre-configured credentials: `root` / `root`
+- Health endpoint: `http://localhost:8090/-/health`
+
+**Disabled Services (not needed for interview demos):**
+- ✗ Prometheus, Alertmanager, Grafana (monitoring/metrics)
+- ✗ All exporters (node, redis, postgres, gitlab)
+- ✗ Container Registry
+- ✗ GitLab Pages
+- ✗ GitLab KAS (Kubernetes Agent Server)
+- ✗ Mattermost (chat integration)
+- ✗ Email (SMTP, incoming email)
+- ✗ Auto DevOps and expensive CI/CD features
+
+**Optimized Settings:**
+- Puma workers: 2 (default 4+ based on CPU cores)
+- Puma threads: 1-4 (default 4-8)
+- Sidekiq concurrency: 10 (default 25+)
+- PostgreSQL max connections: 100 (default 200+)
+- PostgreSQL shared buffers: 256MB (default 512MB+)
+- Shared memory: 256MB (`--shm-size=256m`)
+
+**Why Minimal Configuration?**
+- GitLab CE is a full enterprise platform with 15+ services
+- Default installation uses 10-12GB RAM, slow startup (3-10 minutes)
+- Interview demos only need: Web UI, Git operations (HTTP/SSH), Jenkins integration
+- Disabling monitoring/registry/pages reduces RAM to ~4-6GB and improves UI responsiveness
+- Puma slowness (10-40 second responses) caused by expensive features like commit signature verification
+
+**GitLab Docker Configuration:**
+```bash
+docker run -d \
+  --name gitlab \
+  --hostname gitlab.local \
+  -p 0.0.0.0:8090:80 \
+  -p 0.0.0.0:8022:22 \
+  -e GITLAB_OMNIBUS_CONFIG="external_url 'http://localhost:8090'; gitlab_rails['gitlab_shell_ssh_port'] = 8022;" \
+  -e GITLAB_ROOT_PASSWORD="interview2024" \
+  -v gitlab_config:/etc/gitlab \
+  -v gitlab_logs:/var/log/gitlab \
+  -v gitlab_data:/var/opt/gitlab \
+  gitlab/gitlab-ce:latest
+```
+
+**Note:** GitLab initialization takes 3-10 minutes on first boot depending on system resources.
+
 ### Jenkins Automation (`jenkins-init-scripts/`)
 
 **jenkins-init-scripts/deploy-jenkins.sh** - Jenkins container deployment with full automation
@@ -64,11 +127,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **jenkins-init-scripts/02-create-admin-user.groovy** - Creates admin/admin user automatically
 **jenkins-init-scripts/03-configure-executors.groovy** - Sets executor count to 2
 
+### GitLab-Jenkins Network Bridge
+
+**Custom Docker Bridge Network:** `gitlab-jenkins-network`
+- Created after both GitLab and Jenkins containers are running
+- Enables container-to-container communication via DNS (hostname resolution)
+- Jenkins can reach GitLab using `http://gitlab:8090` instead of `http://localhost:8090`
+- Critical for Jenkins pipeline to clone from GitLab repository
+
+**Why Custom Network?**
+- Default Docker bridge doesn't support automatic DNS resolution
+- Custom bridge networks provide built-in DNS for container names
+- Allows URL translation: user uses `localhost:8090`, Jenkins uses `gitlab:8090`
+
 ### Helper Scripts (Support Tools - `helpers/`)
 
 **helpers/php-debug.sh** - PHP debugging assistant
-**helpers/create-jenkins-job.sh** - Creates Jenkins pipeline job via Script Console API
+**helpers/create-jenkins-job.sh** - Creates Jenkins pipeline job via Script Console API (includes GitLab URL translation)
 **helpers/k8s-helpers.sh** - kubectl command reference + diagnostics
+**helpers/gitlab-helpers.sh** - GitLab operations and troubleshooting commands
 
 ## Template Files Architecture
 
@@ -158,15 +235,18 @@ All deployment files are generated from templates in `templates/` directory usin
 
 ### Docker Environment Switching
 The infrastructure setup follows this critical sequence:
-1. **Deploy Jenkins in host Docker** - `deploy-jenkins.sh` runs before `eval $(minikube docker-env)`
-2. **Validate Jenkins** - Ensures Jenkins container is running in host Docker context
-3. **Switch to minikube Docker** - After Jenkins validation, runs `eval $(minikube docker-env)`
-4. **App builds use minikube** - All subsequent `docker build` commands create images in minikube's registry
-5. **Jenkins accesses both** - Jenkins container stays in host Docker but can build to minikube via mounted socket
+1. **Start minikube** - Starts Kubernetes cluster first
+2. **Deploy GitLab in host Docker** - `deploy-gitlab.sh` runs in host Docker context
+3. **Deploy Jenkins in host Docker** - `deploy-jenkins.sh` runs in host Docker context
+4. **Create network bridge** - Connects GitLab and Jenkins via custom bridge network
+5. **Switch to minikube Docker** - After validation, runs `eval $(minikube docker-env)`
+6. **App builds use minikube** - All subsequent `docker build` commands create images in minikube's registry
+7. **Jenkins accesses both** - Jenkins container stays in host Docker but can build to minikube via mounted socket
 
 This architecture ensures:
-- Jenkins container persists across minikube restarts
-- Faster Jenkins startup (no K8s overhead)
+- GitLab and Jenkins containers persist across minikube restarts
+- Faster startup (no K8s overhead for CI/CD infrastructure)
+- Container-to-container communication via DNS (gitlab-jenkins-network)
 - Images built by Jenkins are immediately available to K8s pods
 - No need to push images to external registry
 
@@ -233,10 +313,18 @@ grep -r "{{" templates/  # Should show all placeholders
 
 ### Cleanup Commands
 ```bash
+# DEFAULT MODE - Remove stale resources, keep base images and network
+./cleanup.sh
+
+# FULL MODE - Complete wipe including base images
+./cleanup.sh --full
+
+# Manual cleanup (if needed)
 # Stop and remove all components
 minikube delete
-docker stop jenkins && docker rm jenkins
-docker volume rm jenkins_home
+docker stop gitlab jenkins && docker rm gitlab jenkins
+docker volume rm gitlab_config gitlab_logs gitlab_data jenkins_home
+docker network rm gitlab-jenkins-network
 
 # Remove generated files
 rm -f Dockerfile Jenkinsfile .dockerignore quick-deploy.sh .env.interview
@@ -294,17 +382,55 @@ find . -name "*.php" -not -path "./vendor/*" | while read file; do
 done
 ```
 
+### GitLab URL Translation Pattern
+**Problem:** GitLab container is accessible at different URLs depending on context:
+- User (browser, git clone): `http://localhost:8090`
+- Jenkins container: `http://gitlab:8090` (uses container name)
+
+**Solution:** Automatic URL translation in `2-generate-project.sh`:
+
+```bash
+translate_gitlab_url_for_jenkins() {
+    local url="$1"
+    if [[ "$url" =~ localhost:8090 ]]; then
+        echo "$url" | sed 's|localhost:8090|gitlab:8090|g'
+    else
+        echo "$url"  # External GitLab - no translation needed
+    fi
+}
+```
+
+**Where Translation Happens:**
+1. **User input:** User provides `http://localhost:8090/root/project.git`
+2. **Jenkinsfile generation:** Template substitutes with `http://gitlab:8090/root/project.git`
+3. **Job creation:** `helpers/create-jenkins-job.sh` also translates for job XML
+4. **`.env.interview`:** Saves both URLs:
+   - `GITLAB_URL` - for user reference (localhost:8090)
+   - `GITLAB_URL_JENKINS` - for Jenkins use (gitlab:8090)
+
+**Why This Works:**
+- Custom bridge network (`gitlab-jenkins-network`) provides DNS resolution
+- Jenkins container resolves `gitlab` hostname to GitLab container's IP
+- User continues using `localhost:8090` for browser and git operations
+- Jenkins pipeline automatically uses correct internal URL
+
 ## Interview Workflow Timeline
 
-**Phase 1 (0:00-0:20):** Run `1-infra-setup.sh` while listening to requirements
-**Phase 2 (0:20-0:40):** Clone GitLab repo, debug PHP with `php-debug.sh`
-**Phase 3 (0:40-0:55):** Run `2-generate-project.sh`, customize Dockerfile
-**Phase 4 (0:55-1:15):** Test Docker build, deploy to K8s with `quick-deploy.sh`
-**Phase 5 (1:15-1:50):** Push to GitLab, configure Jenkins, run pipeline
-**Phase 6 (1:50-2:15):** Integration test, verify full CI/CD flow
-**Phase 7 (2:15-3:00):** Q&A, demonstrate architecture
+**Phase 1 (0:00-0:25):** Run `1-infra-setup.sh` while listening to requirements (includes GitLab initialization)
+**Phase 2 (0:25-0:26):** Create GitLab project in web UI (30 seconds - manual, visual)
+**Phase 3 (0:26-0:29):** Clone GitLab repo or initialize new repository
+**Phase 4 (0:29-0:49):** Debug PHP with `php-debug.sh`
+**Phase 5 (0:49-0:54):** Run `2-generate-project.sh`, customize Dockerfile
+**Phase 6 (0:54-0:56):** Push to GitLab (git add, commit, push)
+**Phase 7 (0:56-1:06):** Jenkins pipeline auto-triggers and completes build
+**Phase 8 (1:06-1:08):** Verify deployment, test application
+**Phase 9 (1:08-1:13):** Demo full CI/CD flow with code change
+**Buffer (1:13-3:00):** Q&A, troubleshooting, deep dives
 
-See `INTERVIEW-FLOW.md` for detailed minute-by-minute breakdown.
+**Total active work:** ~1hr 15min
+**Buffer time:** 1hr 45min (58% buffer - very comfortable for 3-hour interview)
+
+See `WORKFLOWS.md` for complete step-by-step guide with commands.
 
 ## Modification Guidelines
 
@@ -444,14 +570,128 @@ kubectl delete pod <pod-name> -n <namespace>
 
 **Prevention:** Run `./cleanup.sh` before each test cycle to ensure clean Docker environment.
 
+### GitLab Initialization Timeout
+**Problem:** GitLab container starts but health check fails after 5 minutes.
+
+**Root Cause:** GitLab CE initialization takes 3-10 minutes on first boot depending on system resources (CPU, memory, disk I/O). The default 5-minute timeout may be insufficient on slower systems.
+
+**Immediate Solution:**
+```bash
+# Wait longer - GitLab may still be initializing
+# Check logs to monitor progress
+docker logs -f gitlab
+
+# Look for: "gitlab Reconfigured!" (initialization complete)
+# Then manually check health
+curl http://localhost:8090/-/health
+# Expected: {"status":"ok"}
+```
+
+**Permanent Fix Options:**
+1. **Increase timeout in `gitlab-init-scripts/deploy-gitlab.sh`:**
+   ```bash
+   # Change from 60 to 120 retries (10 minutes)
+   local max_attempts=120  # 120 × 5 seconds = 10 minutes
+   ```
+
+2. **Use helper script to monitor:**
+   ```bash
+   ./helpers/gitlab-helpers.sh logs-live
+   # Wait for "gitlab Reconfigured!" message
+   ```
+
+3. **Verify container resources:**
+   ```bash
+   docker stats gitlab
+   # Ensure adequate CPU/memory allocation
+   ```
+
+**If GitLab still fails:**
+```bash
+# Restart GitLab container
+docker restart gitlab
+
+# Or redeploy from scratch
+docker stop gitlab && docker rm gitlab
+docker volume rm gitlab_config gitlab_logs gitlab_data
+./gitlab-init-scripts/deploy-gitlab.sh
+```
+
+### GitLab-Jenkins Connectivity Issues
+**Problem:** Jenkins pipeline fails to clone from GitLab repository.
+
+**Common Causes:**
+1. **Network not connected:** Containers aren't on `gitlab-jenkins-network`
+2. **URL mismatch:** Jenkinsfile uses `localhost:8090` instead of `gitlab:8090`
+3. **GitLab not ready:** GitLab container is starting but not fully initialized
+
+**Diagnosis:**
+```bash
+# 1. Check network connections
+docker network inspect gitlab-jenkins-network
+# Should show both gitlab and jenkins containers
+
+# 2. Test connectivity from Jenkins
+docker exec jenkins curl -v http://gitlab:8090/-/health
+# Should return HTTP 200
+
+# 3. Use helper script
+./helpers/gitlab-helpers.sh test
+# Runs full connectivity test
+```
+
+**Fix:**
+```bash
+# Reconnect containers to network
+docker network connect gitlab-jenkins-network gitlab
+docker network connect gitlab-jenkins-network jenkins
+
+# Verify Jenkinsfile uses correct URL
+cat Jenkinsfile | grep GIT_REPO
+# For local GitLab, should show: http://gitlab:8090/root/project.git
+# (NOT localhost:8090)
+```
+
+### GitLab Web UI Not Accessible
+**Problem:** Cannot access GitLab at `http://localhost:8090`
+
+**Diagnosis:**
+```bash
+# 1. Check container status
+docker ps | grep gitlab
+# Should show gitlab container with ports 0.0.0.0:8090->80/tcp
+
+# 2. Check health endpoint
+curl http://localhost:8090/-/health
+
+# 3. Check logs
+docker logs gitlab | tail -50
+```
+
+**Common Fixes:**
+```bash
+# Port conflict - another service using 8090
+sudo lsof -i :8090  # Linux/macOS
+# Kill conflicting process or change GitLab port
+
+# Container crashed - check logs
+docker logs gitlab
+# Look for errors, OOM (out of memory), etc.
+
+# Restart GitLab
+./helpers/gitlab-helpers.sh restart
+```
+
 ## Documentation Files
 
 - **README.md** - Overview, quick start, what gets installed
 - **QUICK-START.md** - Fast setup for interview day
 - **INSTALLATION-GUIDE.md** - Detailed installation steps
+- **WORKFLOWS.md** - Complete step-by-step workflow with GitLab setup
 - **docs/INTERVIEW-FLOW.md** - Detailed 3-hour timeline with phases
 - **docs/CHEATSHEET.md** - All Docker/kubectl/PHP/Git commands
 - **docs/TROUBLESHOOTING.md** - Common issues and solutions
+- **helpers/gitlab-helpers.sh** - GitLab command reference and diagnostics
 
 ## Design Philosophy
 

@@ -93,6 +93,10 @@ deploy_jenkins() {
         return 1
     fi
 
+    # Create shared network for Jenkins-GitLab communication
+    log_info "Creating gitlab-jenkins-network..."
+    docker network create gitlab-jenkins-network 2>/dev/null || log_info "Network already exists"
+
     log_info "Starting Jenkins container with automation..."
     log_info "Init scripts: $INIT_SCRIPTS_DIR"
 
@@ -100,6 +104,7 @@ deploy_jenkins() {
     if ! docker run -d \
         --name jenkins \
         --restart unless-stopped \
+        --network gitlab-jenkins-network \
         -p 0.0.0.0:8080:8080 \
         -p 0.0.0.0:50000:50000 \
         -e JAVA_OPTS="-Djenkins.install.runSetupWizard=false" \
