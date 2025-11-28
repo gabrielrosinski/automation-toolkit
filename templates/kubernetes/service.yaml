@@ -10,7 +10,7 @@ spec:
   selector:
     app: {{APP_NAME}}
   ports:
-  - port: {{APP_PORT}}
-    targetPort: {{APP_PORT}}
+  - port: 80
+    targetPort: {{APP_PORT}}  # Container runs on non-privileged port
     protocol: TCP
     name: http

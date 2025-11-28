@@ -135,10 +135,10 @@ echo "Available PHP versions: 7.4, 8.0, 8.1, 8.2, 8.3"
 read -p "PHP version [$DEFAULT_PHP]: " PHP_VERSION
 PHP_VERSION=${PHP_VERSION:-$DEFAULT_PHP}
 
-# Prompt for application port
+# Prompt for application port (8080 default for non-root container)
 while true; do
-    read -p "Application port [80]: " APP_PORT
-    APP_PORT=${APP_PORT:-80}
+    read -p "Application port [8080]: " APP_PORT
+    APP_PORT=${APP_PORT:-8080}
     if validate_port "$APP_PORT"; then
         break
     fi

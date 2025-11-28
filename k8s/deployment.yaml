@@ -33,7 +33,7 @@ spec:
         # Never pull - image is built directly in minikube's Docker daemon
         imagePullPolicy: Never
         ports:
-        - containerPort: 80
+        - containerPort: 8080
           name: http
         securityContext:
           allowPrivilegeEscalation: false
@@ -44,19 +44,19 @@ spec:
         startupProbe:
           httpGet:
             path: /
-            port: 80
+            port: 8080
           failureThreshold: 30
           periodSeconds: 10
         livenessProbe:
           httpGet:
             path: /
-            port: 80
+            port: 8080
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /
-            port: 80
+            port: 8080
           initialDelaySeconds: 10
           periodSeconds: 5
         resources:
