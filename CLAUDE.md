@@ -25,6 +25,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - ✅ Single responsibility: Jenkins setup vs pipeline job creation split
 - ✅ Docker environment properly isolated (Jenkins in host, apps in minikube)
 - ✅ Maintainable `{{PLACEHOLDER}}` syntax instead of `_PLACEHOLDER` tokens
+- ✅ True multi-stage Docker builds (builder + runtime, ~20% smaller images)
+- ✅ Non-root containers (USER www-data, port 8080, runAsNonRoot: true)
+- ✅ Auto-detect PHP app directory (builds from folder containing index.php)
+- ✅ Optimized K8s health probes (explicit timeouts, faster startup detection)
+- ✅ Security hardening (drop ALL capabilities, minimal Apache modules)
 
 ## Core Architecture
 
@@ -70,11 +75,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 All deployment files are generated from templates in `templates/` directory using placeholder substitution.
 
 ### Dockerfile Template (`templates/docker/Dockerfile`)
-- Multi-stage build pattern with `FROM php:{{PHP_VERSION}}-apache`
-- Installs common PHP extensions: pdo_mysql, mbstring, exif, pcntl, bcmath, gd
-- Enables Apache mod_rewrite
-- Includes HEALTHCHECK directive on port `{{APP_PORT}}`
-- Sets proper permissions (www-data:www-data)
+- **True multi-stage build:** Builder stage compiles PHP extensions, runtime stage is lean (~20% smaller)
+- **Builder stage:** Installs -dev packages, compiles extensions (pdo_mysql, mbstring, exif, pcntl, bcmath, gd)
+- **Runtime stage:** Only runtime libraries (libpng16-16, libonig5, libxml2), no build tools
+- **Security hardening:**
+  - Runs as non-root user (USER www-data)
+  - Non-privileged port 8080 (configurable via {{APP_PORT}})
+  - Disabled unnecessary Apache modules (access_compat, auth_basic, autoindex, deflate, etc.)
+- **Optimizations:**
+  - Aggressive cleanup: `apt-get autoremove`, removes docs/man pages, cleans /tmp
+  - `--no-install-recommends` to minimize package installation
+  - `COPY --chown` for efficient ownership transfer
+- **Health check:** `curl -sSf` (silent but shows errors on failure)
 - Placeholders: `{{PHP_VERSION}}`, `{{APP_PORT}}`
 
 ### Jenkinsfile Template (`templates/Jenkinsfile`)
