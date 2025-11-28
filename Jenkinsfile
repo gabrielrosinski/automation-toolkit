@@ -194,14 +194,15 @@ pipeline {
                         kubectl get svc -n ${K8S_NAMESPACE}
                     """
 
-                    // Get service URL
-                    def serviceUrl = sh(
-                        script: "minikube service ${APP_NAME} --url -n ${K8S_NAMESPACE}",
+                    // Get service URL (NodePort)
+                    def nodePort = sh(
+                        script: "kubectl get svc ${APP_NAME} -n ${K8S_NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}'",
                         returnStdout: true
                     ).trim()
 
                     echo "Application deployed successfully!"
-                    echo "Access URL: ${serviceUrl}"
+                    echo "Access via: minikube service ${APP_NAME} -n ${K8S_NAMESPACE} --url"
+                    echo "Or: curl http://\$(minikube ip):${nodePort}"
                 }
             }
         }
