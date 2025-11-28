@@ -144,90 +144,175 @@ fix_docker_credentials() {
     return 0
 }
 
-# Ensure Docker daemon is running
-ensure_docker_running() {
-    log_info "Checking Docker daemon status..."
+# Check if Docker is actually functional (not just command exists)
+is_docker_functional() {
+    docker ps >/dev/null 2>&1
+}
 
-    # Try to ping Docker daemon
-    if docker ps >/dev/null 2>&1; then
-        log_success "Docker daemon is running"
-        # Fix credential helper if needed
-        fix_docker_credentials
-        return 0
+# Check if docker command is Docker Desktop WSL2 stub (not functional)
+is_docker_desktop_stub() {
+    if [[ "$OS" != "wsl" ]]; then
+        return 1
+    fi
+    # Docker Desktop stub outputs specific messages when not running
+    docker 2>&1 | grep -qi "docker desktop\|wsl 2 distro\|wsl integration\|could not be found"
+}
+
+# Check if native Docker is installed in WSL/Linux
+is_native_docker_installed() {
+    # Check for dockerd binary (native Docker installation)
+    command -v dockerd >/dev/null 2>&1 || \
+    [[ -f /usr/bin/dockerd ]] || \
+    [[ -f /usr/local/bin/dockerd ]]
+}
+
+# Wait for Docker Desktop to start (user must start it manually on Windows/macOS)
+wait_for_docker_desktop() {
+    local max_wait=${1:-120}  # Default 2 minutes
+    log_warning "Please start Docker Desktop manually"
+    log_info "Waiting for Docker Desktop to start (max ${max_wait}s)..."
+
+    local elapsed=0
+    while [ $elapsed -lt $max_wait ]; do
+        if is_docker_functional; then
+            echo ""
+            log_success "Docker Desktop is now running"
+            fix_docker_credentials
+            return 0
+        fi
+        echo -n "."
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    echo ""
+    log_error "Docker Desktop did not start within ${max_wait} seconds"
+    return 1
+}
+
+# Start native Docker daemon (Linux/WSL with native Docker)
+start_native_docker() {
+    log_info "Starting native Docker daemon..."
+
+    # Try multiple methods in order of preference
+    if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files docker.service >/dev/null 2>&1; then
+        log_info "Using systemctl..."
+        sudo systemctl start docker
+        sleep 3
+    elif command -v service >/dev/null 2>&1 && [ -f /etc/init.d/docker ]; then
+        log_info "Using service command..."
+        sudo service docker start
+        sleep 3
+    else
+        log_info "Starting dockerd directly..."
+        sudo dockerd > /tmp/dockerd.log 2>&1 &
+        sleep 5
     fi
 
-    log_warning "Docker daemon is not running. Attempting to start..."
-
-    case $OS in
-        wsl)
-            sudo service docker start
-            sleep 3
-            ;;
-        linux)
-            sudo systemctl start docker
-            sleep 3
-            ;;
-        macos)
-            log_warning "Please start Docker Desktop manually"
-            log_info "Waiting for Docker Desktop to start..."
-            for i in {1..30}; do
-                if docker ps >/dev/null 2>&1; then
-                    log_success "Docker Desktop is now running"
-                    return 0
-                fi
-                echo -n "."
-                sleep 2
-            done
-            log_error "Docker Desktop did not start within 60 seconds"
-            return 1
-            ;;
-    esac
-
-    # Verify Docker started
-    if docker ps >/dev/null 2>&1; then
-        log_success "Docker daemon started successfully"
-        # Fix credential helper if needed
+    # Verify it started
+    if is_docker_functional; then
+        log_success "Native Docker daemon started successfully"
         fix_docker_credentials
         return 0
     else
-        log_error "Failed to start Docker daemon"
+        log_error "Failed to start native Docker daemon"
+        [ -f /tmp/dockerd.log ] && log_info "Check /tmp/dockerd.log for details"
         return 1
     fi
 }
 
-# Install Docker
+# Install native Docker in Linux/WSL
+install_native_docker() {
+    log_info "Installing native Docker..."
+
+    # Download and run Docker install script
+    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+    sudo sh /tmp/get-docker.sh
+    rm /tmp/get-docker.sh
+
+    # Add current user to docker group
+    sudo usermod -aG docker $USER
+
+    # Enable and start Docker
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl enable docker 2>/dev/null || true
+    fi
+
+    # Start Docker
+    start_native_docker
+}
+
+# Main Docker setup function
 install_docker() {
     log_info "Checking Docker installation..."
 
-    if command_exists docker; then
-        log_success "Docker already installed: $(docker --version)"
-        # Even if installed, ensure daemon is running
-        ensure_docker_running
+    # Step 1: Check if Docker is already functional
+    if is_docker_functional; then
+        log_success "Docker is already running: $(docker --version)"
+        fix_docker_credentials
         return 0
     fi
 
-    log_info "Installing Docker..."
-    
+    # Step 2: Docker not running - figure out what we have and start/install it
     case $OS in
-        linux|wsl)
-            # Install Docker on Linux/WSL
-            curl -fsSL https://get.docker.com -o get-docker.sh
-            sudo sh get-docker.sh
-            sudo usermod -aG docker $USER
-            rm get-docker.sh
-            
-            # Start Docker service
-            if [[ $OS == "wsl" ]]; then
-                sudo service docker start
+        wsl)
+            if is_docker_desktop_stub; then
+                # Docker Desktop integration exists but not running
+                log_info "Docker Desktop WSL2 integration detected"
+
+                # Ask user: start Docker Desktop or install native Docker?
+                echo ""
+                echo "Docker Desktop is configured but not running."
+                echo "Options:"
+                echo "  1) Start Docker Desktop on Windows (recommended if installed)"
+                echo "  2) Install native Docker in WSL2 (independent of Windows)"
+                echo ""
+                read -p "Choose option [1/2]: " docker_choice
+
+                case $docker_choice in
+                    2)
+                        log_info "Installing native Docker in WSL2..."
+                        install_native_docker
+                        ;;
+                    *)
+                        wait_for_docker_desktop 120
+                        ;;
+                esac
+            elif is_native_docker_installed; then
+                # Native Docker installed but not running
+                log_info "Native Docker found but not running"
+                start_native_docker
             else
-                sudo systemctl start docker
-                sudo systemctl enable docker
+                # No Docker at all - install native Docker
+                log_info "No Docker installation found"
+                install_native_docker
             fi
             ;;
+
+        linux)
+            if is_native_docker_installed; then
+                # Docker installed but not running
+                log_info "Docker found but not running"
+                start_native_docker
+            else
+                # No Docker - install it
+                log_info "No Docker installation found"
+                install_native_docker
+            fi
+            ;;
+
         macos)
-            log_warning "Please install Docker Desktop manually from: https://www.docker.com/products/docker-desktop"
-            log_warning "Press Enter after Docker Desktop is installed and running..."
-            read
+            if command_exists docker; then
+                # Docker Desktop installed but not running
+                log_info "Docker Desktop found but not running"
+                wait_for_docker_desktop 120
+            else
+                # No Docker - must install Docker Desktop manually
+                log_warning "Docker Desktop not found"
+                log_warning "Please install Docker Desktop from: https://www.docker.com/products/docker-desktop"
+                log_warning "Press Enter after Docker Desktop is installed..."
+                read
+                wait_for_docker_desktop 120
+            fi
             ;;
     esac
     
@@ -592,8 +677,8 @@ main() {
     
     detect_os
     echo ""
-    
-    # Install all tools
+
+    # Install all tools (Docker is handled first as other tools depend on it)
     install_docker
     install_kubectl
     install_minikube

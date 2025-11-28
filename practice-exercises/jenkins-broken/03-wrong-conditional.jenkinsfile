@@ -1,0 +1,46 @@
+// BROKEN JENKINSFILE #3 - Find 2 logic/conditional errors
+
+pipeline {
+    agent any
+
+    environment {
+        DEPLOY_ENV = 'staging'
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                sh 'docker build -t app:latest .'
+            }
+        }
+
+        stage('Deploy to Staging') {
+            when {
+                environment name: 'DEPLOY_ENV', value = 'staging'
+            }
+            steps {
+                sh 'kubectl apply -f k8s/staging/'
+            }
+        }
+
+        stage('Deploy to Production') {
+            when {
+                branch 'main'
+                environment name: 'DEPLOY_ENV', value: 'production'
+            }
+            steps {
+                sh 'kubectl apply -f k8s/production/'
+            }
+        }
+
+        stage('Notify') {
+            steps {
+                script {
+                    if (currentBuild.result = 'SUCCESS') {
+                        echo "Build succeeded!"
+                    }
+                }
+            }
+        }
+    }
+}

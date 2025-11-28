@@ -30,7 +30,8 @@ spec:
       containers:
       - name: {{APP_NAME}}
         image: "{{IMAGE_NAME}}:latest"
-        imagePullPolicy: IfNotPresent
+        # Never pull - image is built directly in minikube's Docker daemon
+        imagePullPolicy: Never
         ports:
         - containerPort: {{APP_PORT}}
           name: http

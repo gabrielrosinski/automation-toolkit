@@ -7,9 +7,46 @@ pipeline {
         IMAGE_TAG = "${BUILD_NUMBER}"
         K8S_NAMESPACE = '{{K8S_NAMESPACE}}'
         GIT_REPO = '{{GIT_REPO}}'
+        // Minikube Docker env file path
+        MINIKUBE_DOCKER_ENV = '/var/jenkins_home/minikube-docker-env.sh'
     }
 
     stages {
+        stage('Verify Minikube Docker') {
+            steps {
+                script {
+                    echo "Verifying minikube Docker connection..."
+                    sh '''#!/bin/bash
+                        MINIKUBE_ENV="/var/jenkins_home/minikube-docker-env.sh"
+                        if [ ! -f "$MINIKUBE_ENV" ]; then
+                            echo "============================================="
+                            echo "ERROR: Minikube Docker env file not found!"
+                            echo "File: $MINIKUBE_ENV"
+                            echo "============================================="
+                            echo "This means Jenkins cannot build images in minikube's Docker."
+                            echo "Images will be built in host Docker and K8s won't find them."
+                            echo ""
+                            echo "To fix, run: ./jenkins-init-scripts/deploy-jenkins.sh"
+                            echo "============================================="
+                            exit 1
+                        fi
+                        source "$MINIKUBE_ENV"
+                        echo "DOCKER_HOST: $DOCKER_HOST"
+                        echo "DOCKER_CERT_PATH: $DOCKER_CERT_PATH"
+
+                        # Verify connection to minikube Docker
+                        if docker info --format "Connected to Docker daemon: {{.Name}}" 2>/dev/null; then
+                            echo "SUCCESS: Jenkins can build images in minikube's Docker"
+                        else
+                            echo "ERROR: Cannot connect to minikube Docker daemon!"
+                            echo "Check if minikube is running: minikube status"
+                            exit 1
+                        fi
+                    '''
+                }
+            }
+        }
+
         stage('PHP Syntax Check') {
             steps {
                 script {
@@ -18,7 +55,7 @@ pipeline {
                         set +e
                         ERROR_COUNT=0
 
-                        for file in $(find . -name "*.php" -not -path "./vendor/*"); do
+                        for file in $(find . -name "*.php" -not -path "./vendor/*" -not -path "./buged-php/*"); do
                             if ! php -l "$file" 2>&1; then
                                 ERROR_COUNT=$((ERROR_COUNT + 1))
                             fi
@@ -44,15 +81,19 @@ pipeline {
                 script {
                     echo "Building Docker image in minikube Docker: ${IMAGE_NAME}:${IMAGE_TAG}"
                     sh """#!/bin/bash
-                        # Source minikube Docker environment
-                        if [ -f /var/jenkins_home/minikube-docker-env.sh ]; then
-                            source /var/jenkins_home/minikube-docker-env.sh
+                        set -e
+
+                        # Source minikube Docker environment (REQUIRED)
+                        MINIKUBE_ENV="/var/jenkins_home/minikube-docker-env.sh"
+                        if [ -f "\$MINIKUBE_ENV" ]; then
+                            source "\$MINIKUBE_ENV"
                             echo "Using minikube Docker daemon: \$DOCKER_HOST"
                         else
-                            echo "WARNING: minikube Docker env not found, using default Docker"
+                            echo "ERROR: minikube Docker env not found!"
+                            echo "Images will be built in wrong Docker - K8s won't find them!"
+                            exit 1
                         fi
 
-                        # Build image in minikube's Docker
                         # Remove old :latest tag to prevent stale image issues
                         docker rmi ${IMAGE_NAME}:latest 2>/dev/null || echo "No old :latest tag found"
 
@@ -60,8 +101,13 @@ pipeline {
                         docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                         docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
 
-                        # Verify image exists
-                        docker images | grep ${IMAGE_NAME} || echo "WARNING: Image not found after build"
+                        # Verify image exists in minikube's Docker
+                        echo "Verifying image in minikube Docker..."
+                        docker images | grep "${IMAGE_NAME}" || {
+                            echo "ERROR: Image not found after build!"
+                            exit 1
+                        }
+                        echo "Image built successfully in minikube's Docker"
                     """
                 }
             }
@@ -140,9 +186,12 @@ pipeline {
             echo "Check logs above for details"
         }
         always {
-            // Cleanup old Docker images (keep last 5)
-            sh '''
-                docker images | grep ${IMAGE_NAME} | tail -n +6 | awk '{print $3}' | xargs -r docker rmi || true
+            // Cleanup old Docker images (keep last 5) - must use minikube Docker
+            sh '''#!/bin/bash
+                if [ -f /var/jenkins_home/minikube-docker-env.sh ]; then
+                    source /var/jenkins_home/minikube-docker-env.sh
+                fi
+                docker images | grep "${IMAGE_NAME}" | tail -n +6 | awk '{print $3}' | xargs -r docker rmi 2>/dev/null || true
             '''
         }
     }

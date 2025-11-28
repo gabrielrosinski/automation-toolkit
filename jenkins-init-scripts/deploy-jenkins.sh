@@ -319,8 +319,22 @@ EOF"
 
         docker exec jenkins chown jenkins:jenkins /var/jenkins_home/minikube-docker-env.sh
 
-        log_success "Minikube Docker environment configured"
-        log_info "Jenkins can now build images in minikube's Docker"
+        # Verify Jenkins can connect to minikube's Docker daemon
+        log_info "Verifying Jenkins can connect to minikube Docker daemon..."
+        if docker exec jenkins bash -c "source /var/jenkins_home/minikube-docker-env.sh && docker ps" >/dev/null 2>&1; then
+            log_success "Jenkins can connect to minikube Docker daemon"
+
+            # Show which Docker daemon Jenkins will use
+            docker exec jenkins bash -c "source /var/jenkins_home/minikube-docker-env.sh && docker info --format '{{.Name}}'" 2>/dev/null && \
+                log_success "Confirmed: Jenkins will build images in minikube's Docker"
+        else
+            log_error "Jenkins CANNOT connect to minikube Docker daemon!"
+            log_info "Debug info:"
+            log_info "  DOCKER_HOST: $JENKINS_DOCKER_HOST"
+            log_info "  Minikube container IP: $MINIKUBE_CONTAINER_IP"
+            docker exec jenkins cat /var/jenkins_home/minikube-docker-env.sh 2>/dev/null || true
+            log_warning "Images may be built in wrong Docker - will cause ImagePullBackOff!"
+        fi
     else
         log_warning "Could not get minikube docker-env - images may build in wrong Docker"
     fi

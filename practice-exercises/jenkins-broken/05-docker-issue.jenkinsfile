@@ -1,0 +1,50 @@
+// BROKEN JENKINSFILE #5 - Find 3 Docker/variable issues
+
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = 'localhost:5000/myapp'
+        IMAGE_TAG = '${BUILD_NUMBER}'
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                sh '''
+                    echo "Building image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                '''
+            }
+        }
+
+        stage('Push') {
+            steps {
+                sh 'docker push ${IMAGE_NAME}:latest'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh """
+                    kubectl set image deployment/myapp \
+                        myapp='${IMAGE_NAME}:${IMAGE_TAG}'
+                """
+            }
+        }
+
+        stage('Verify') {
+            steps {
+                script {
+                    def status = sh(
+                        script: 'kubectl rollout status deployment/myapp',
+                        returnStatus: false
+                    )
+                    if (status != 0) {
+                        error("Deployment failed")
+                    }
+                }
+            }
+        }
+    }
+}

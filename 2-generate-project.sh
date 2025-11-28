@@ -168,8 +168,9 @@ done
 read -p "Git branch name [main]: " GIT_BRANCH
 GIT_BRANCH=${GIT_BRANCH:-main}
 
-# Docker registry (minikube local)
-DOCKER_REGISTRY="localhost:5000"
+# Docker image name (no registry prefix - we build directly in minikube's Docker)
+# When using 'minikube docker-env', images are available to K8s without pushing to a registry
+IMAGE_NAME="${APP_NAME}"
 
 echo ""
 log_info "Configuration summary:"
@@ -179,7 +180,7 @@ echo "  PHP Version: $PHP_VERSION"
 echo "  App Port: $APP_PORT"
 echo "  App Name: $APP_NAME"
 echo "  K8s Namespace: $K8S_NAMESPACE"
-echo "  Docker Registry: $DOCKER_REGISTRY"
+echo "  Docker Image: $IMAGE_NAME (built in minikube Docker)"
 echo ""
 
 read -p "Proceed with generation? [Y/n]: " CONFIRM
@@ -246,7 +247,7 @@ process_template() {
 
     # Replace all placeholders with actual values
     sed_inplace "s|{{APP_NAME}}|${APP_NAME}|g" "$output_file"
-    sed_inplace "s|{{IMAGE_NAME}}|${DOCKER_REGISTRY}/${APP_NAME}|g" "$output_file"
+    sed_inplace "s|{{IMAGE_NAME}}|${IMAGE_NAME}|g" "$output_file"
     sed_inplace "s|{{APP_PORT}}|${APP_PORT}|g" "$output_file"
     sed_inplace "s|{{K8S_NAMESPACE}}|${K8S_NAMESPACE}|g" "$output_file"
     sed_inplace "s|{{PHP_VERSION}}|${PHP_VERSION}|g" "$output_file"

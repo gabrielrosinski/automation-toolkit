@@ -1,0 +1,42 @@
+// BROKEN JENKINSFILE #1 - Find 3 syntax errors
+
+pipeline {
+    agent any
+
+    environment {
+        APP_NAME = 'my-app'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                sh 'echo "Building..."'
+                sh 'docker build -t myapp:latest .'
+            }
+        }
+
+        stage('Test') {
+            steps
+                sh 'echo "Testing..."'
+                sh 'php -l *.php'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh 'kubectl apply -f k8s/'
+                sh "kubectl set image deployment/myapp myapp=myapp:${IMAGE_TAG}
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline succeeded!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
+}

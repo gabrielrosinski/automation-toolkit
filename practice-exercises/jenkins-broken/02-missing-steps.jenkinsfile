@@ -1,0 +1,24 @@
+// BROKEN JENKINSFILE #2 - Find 2 structural errors
+
+pipeline {
+    agent any
+
+    stages {
+        stage('Checkout') {
+            git url: 'http://gitlab.local/repo.git', branch: 'main'
+        }
+
+        stage('Build') {
+            steps {
+                sh 'docker build -t app:latest .'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                echo "Deploying to production"
+            }
+            sh 'kubectl apply -f k8s/'
+        }
+    }
+}
