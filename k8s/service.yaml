@@ -11,6 +11,6 @@ spec:
     app: automation-toolkit
   ports:
   - port: 80
-    targetPort: 8080  # Container runs on 8080 (non-root)
+    targetPort: 8080  # Container runs on non-privileged port
     protocol: TCP
     name: http
