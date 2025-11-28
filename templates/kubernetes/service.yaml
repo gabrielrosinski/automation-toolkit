@@ -5,6 +5,8 @@ metadata:
   namespace: {{K8S_NAMESPACE}}
   labels:
     app: {{APP_NAME}}
+  annotations:
+    description: "External access to {{APP_NAME}} application"
 spec:
   type: NodePort
   selector:

@@ -27,6 +27,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 33  # www-data
         fsGroup: 33
+      terminationGracePeriodSeconds: 30  # Time for graceful shutdown
       containers:
       - name: {{APP_NAME}}
         image: "{{IMAGE_NAME}}:latest"
@@ -45,20 +46,29 @@ spec:
           httpGet:
             path: {{HEALTH_CHECK_PATH}}
             port: {{APP_PORT}}
-          failureThreshold: 30
+            scheme: HTTP
+          failureThreshold: 6         # 6 * 10s = 60s max startup time
           periodSeconds: 10
+          timeoutSeconds: 3
         livenessProbe:
           httpGet:
             path: {{HEALTH_CHECK_PATH}}
             port: {{APP_PORT}}
+            scheme: HTTP
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: {{HEALTH_CHECK_PATH}}
             port: {{APP_PORT}}
+            scheme: HTTP
           initialDelaySeconds: 10
           periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
         resources:
           requests:
             memory: "128Mi"

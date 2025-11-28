@@ -1,23 +1,56 @@
-# PHP Application Dockerfile
-# Optimized for production with best practices
+# Multi-stage PHP Application Dockerfile - Debian optimized
+# Build stage compiles extensions, runtime stage is lean
 
-FROM php:8.1-apache AS base
+# ============================================================================
+# Stage 1: Builder - compile PHP extensions
+# ============================================================================
+FROM php:8.1-apache AS builder
 
-LABEL maintainer="DevOps Team"
-LABEL version="1.0"
-LABEL description="PHP application container"
-
-# Install system dependencies - use --no-install-recommends to reduce image size
+# Install build dependencies (needed for compiling extensions)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
+    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PHP extensions
-RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd
+# ============================================================================
+# Stage 2: Runtime - lean production image
+# ============================================================================
+FROM php:8.1-apache
+
+LABEL maintainer="DevOps Team"
+LABEL version="1.0"
+LABEL description="PHP application container (multi-stage, optimized)"
+
+# Install ONLY runtime dependencies (not -dev packages)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    libpng16-16 \
+    libonig5 \
+    libxml2 \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* \
+    && rm -rf /usr/share/doc /usr/share/man /usr/share/info
+
+# Copy compiled PHP extensions from builder stage
+COPY --from=builder /usr/local/lib/php/extensions/ /usr/local/lib/php/extensions/
+COPY --from=builder /usr/local/etc/php/conf.d/ /usr/local/etc/php/conf.d/
+
+# Disable unnecessary Apache modules to reduce attack surface and size
+# Use || true to prevent build failure if module doesn't exist
+RUN a2dismod -f access_compat || true \
+    && a2dismod -f auth_basic || true \
+    && a2dismod -f authn_file || true \
+    && a2dismod -f authz_host || true \
+    && a2dismod -f authz_user || true \
+    && a2dismod -f autoindex || true \
+    && a2dismod -f deflate || true \
+    && a2dismod -f filter || true \
+    && a2dismod -f negotiation || true \
+    && a2dismod -f status || true
 
 # Enable Apache mod_rewrite
 RUN a2enmod rewrite

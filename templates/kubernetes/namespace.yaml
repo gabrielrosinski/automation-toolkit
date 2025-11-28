@@ -5,3 +5,5 @@ metadata:
   labels:
     name: {{K8S_NAMESPACE}}
     managed-by: jenkins
+  annotations:
+    description: "Namespace for {{K8S_NAMESPACE}} application deployment"
