@@ -201,7 +201,7 @@ show_info() {
     echo "  URL:      http://localhost:8090/-/health"
     echo ""
     echo "From Jenkins Container:"
-    echo "  URL:      http://gitlab:8090"
+    echo "  URL:      http://gitlab:80 (internal port)"
     echo "  (Uses container name instead of localhost)"
     echo ""
     echo "=========================================="
@@ -230,11 +230,11 @@ test_jenkins_connectivity() {
 
     echo ""
     log_info "2. Testing HTTP connectivity to GitLab health endpoint..."
-    local response=$(docker exec jenkins curl -s -o /dev/null -w "%{http_code}" http://gitlab:8090/-/health 2>/dev/null)
+    local response=$(docker exec jenkins curl -s -o /dev/null -w "%{http_code}" http://gitlab:80/-/health 2>/dev/null)
 
     if [ "$response" = "200" ]; then
         log_success "Jenkins can reach GitLab (HTTP 200)"
-        docker exec jenkins curl -s http://gitlab:8090/-/health
+        docker exec jenkins curl -s http://gitlab:80/-/health
     else
         log_error "Jenkins cannot reach GitLab (HTTP $response)"
         log_info "Troubleshooting steps:"

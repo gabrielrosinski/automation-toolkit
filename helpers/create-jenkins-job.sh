@@ -148,7 +148,7 @@ create_pipeline_job() {
     fi
 
     # Process template with variable substitution
-    # Use translated URL for Jenkins (gitlab:8090 instead of localhost:8090)
+    # Use translated URL for Jenkins (gitlab:80 instead of localhost:8090)
     cat "$TEMPLATE_FILE" | \
         sed "s|{{APP_NAME}}|${APP_NAME}|g" | \
         sed "s|{{GITLAB_URL}}|${JENKINS_GITLAB_URL}|g" | \

@@ -168,15 +168,25 @@ pipeline {
 
                     if (deploymentExists) {
                         echo "Deployment exists, updating image..."
+
+                        // Get current image from deployment to detect mismatches
+                        def currentImage = sh(
+                            script: "kubectl get deployment ${APP_NAME} -n ${K8S_NAMESPACE} -o jsonpath='{.spec.template.spec.containers[0].image}'",
+                            returnStdout: true
+                        ).trim()
+                        echo "Current deployment image: ${currentImage}"
+                        echo "New image: ${IMAGE_NAME}:${IMAGE_TAG}"
+
+                        // Patch deployment with correct image (handles image name mismatches)
                         sh """
-                            kubectl set image deployment/${APP_NAME} \
-                                ${APP_NAME}=${IMAGE_NAME}:${IMAGE_TAG} \
-                                -n ${K8S_NAMESPACE}
+                            kubectl patch deployment ${APP_NAME} -n ${K8S_NAMESPACE} \
+                                --type='json' \
+                                -p='[{"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "${IMAGE_NAME}:${IMAGE_TAG}"}]'
                         """
                     } else {
                         echo "Deployment does not exist, creating new..."
                         sh """
-                            kubectl apply -f k8s/namespace.yaml
+                            kubectl apply -f k8s/namespace.yaml 2>/dev/null || true
                             kubectl apply -f k8s/
                         """
                     }

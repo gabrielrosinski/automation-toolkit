@@ -629,7 +629,7 @@ validate_installation() {
 
             # Verify Jenkins can reach GitLab (if both exist)
             if docker ps --filter "name=jenkins" --format "{{.Names}}" | grep -q "^jenkins$"; then
-                if docker exec jenkins curl -s http://gitlab:8090/-/health >/dev/null 2>&1; then
+                if docker exec jenkins curl -s http://gitlab:80/-/health >/dev/null 2>&1; then
                     log_success "✓ Jenkins → GitLab connectivity verified"
                 else
                     log_warning "⚠ Jenkins cannot reach GitLab (network issue)"
@@ -694,7 +694,7 @@ GITLAB_URL=${GITLAB_STATUS}
 
 # GitLab Access:
 # - Browser: http://localhost:8090
-# - Jenkins: http://gitlab:8090 (container name DNS)
+# - Jenkins: http://gitlab:80 (container name DNS, internal port)
 # - Credentials: root / interview2024
 
 # Minikube registry:
@@ -767,12 +767,54 @@ main() {
 
         # Verify connectivity
         sleep 2
-        if docker exec jenkins curl -s http://gitlab:8090/-/health >/dev/null 2>&1; then
-            log_success "Jenkins can reach GitLab at http://gitlab:8090"
+        if docker exec jenkins curl -s http://gitlab:80/-/health >/dev/null 2>&1; then
+            log_success "Jenkins can reach GitLab at http://gitlab:80"
         else
             log_warning "Jenkins → GitLab connectivity check failed (may need time)"
             log_info "Connectivity will be tested again during validation"
         fi
+    fi
+
+    # Connect Jenkins to minikube network (critical for Docker builds)
+    echo ""
+    log_info "Connecting Jenkins to minikube network for Docker builds..."
+    docker network connect minikube jenkins 2>/dev/null || true
+
+    # Copy minikube TLS certs to Jenkins for secure Docker connection
+    log_info "Setting up minikube Docker certs in Jenkins..."
+    docker exec jenkins mkdir -p /var/jenkins_home/.minikube-docker
+
+    # Get minikube certs path and copy to Jenkins
+    MINIKUBE_CERT_PATH=$(minikube docker-env --shell bash | grep DOCKER_CERT_PATH | cut -d'"' -f2)
+    if [[ -n "$MINIKUBE_CERT_PATH" && -d "$MINIKUBE_CERT_PATH" ]]; then
+        docker cp "$MINIKUBE_CERT_PATH/ca.pem" jenkins:/var/jenkins_home/.minikube-docker/
+        docker cp "$MINIKUBE_CERT_PATH/cert.pem" jenkins:/var/jenkins_home/.minikube-docker/
+        docker cp "$MINIKUBE_CERT_PATH/key.pem" jenkins:/var/jenkins_home/.minikube-docker/
+        docker exec jenkins chown -R jenkins:jenkins /var/jenkins_home/.minikube-docker
+        log_success "Minikube Docker certs copied to Jenkins"
+    else
+        log_warning "Could not find minikube certs, Docker builds may fail"
+    fi
+
+    # Get minikube's internal IP (on minikube network)
+    MINIKUBE_IP=$(docker inspect minikube --format='{{ range .NetworkSettings.Networks }}{{ .IPAddress }}{{ end }}' | tr -d ' ' | head -1)
+
+    # Create minikube Docker env file for Jenkins
+    log_info "Creating minikube Docker env file in Jenkins..."
+    docker exec jenkins bash -c "cat > /var/jenkins_home/minikube-docker-env.sh << 'ENVEOF'
+export DOCKER_TLS_VERIFY=1
+export DOCKER_HOST=tcp://${MINIKUBE_IP}:2376
+export DOCKER_CERT_PATH=/var/jenkins_home/.minikube-docker
+export MINIKUBE_ACTIVE_DOCKERD=minikube
+ENVEOF"
+
+    # Verify Jenkins can reach minikube Docker
+    sleep 2
+    if docker exec jenkins bash -c "source /var/jenkins_home/minikube-docker-env.sh && docker info --format '{{.Name}}'" 2>/dev/null | grep -q minikube; then
+        log_success "Jenkins can build images in minikube's Docker daemon"
+    else
+        log_warning "Jenkins → minikube Docker connectivity check failed"
+        log_info "Will retry during validation"
     fi
 
     echo ""

@@ -53,17 +53,16 @@ detect_os() {
 
 wait_for_gitlab() {
     log_info "Monitoring GitLab initialization (fail-fast mode)..."
-    log_info "Streaming logs - will exit immediately on errors"
+    log_info "Will exit immediately on configuration errors"
     echo ""
 
     local max_attempts=60  # 5 minutes with 5s intervals
     local attempt=0
-    local last_log_line=0
 
     while [ $attempt -lt $max_attempts ]; do
         # Check for container crashes/restarts
-        CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' gitlab 2>/dev/null || echo "missing")
-        if [[ "$CONTAINER_STATUS" == "restarting" ]] || [[ "$CONTAINER_STATUS" == "exited" ]]; then
+        CONTAINER_STATUS=$(docker inspect -f '{{ .State.Status }}' gitlab 2>/dev/null || echo "missing")
+        if [[ "$CONTAINER_STATUS" == "restarting" ]] || [[ "$CONTAINER_STATUS" == "exited" ]] || [[ "$CONTAINER_STATUS" == "missing" ]]; then
             echo ""
             log_error "GitLab container crashed (status: $CONTAINER_STATUS)"
             log_info "Last 30 lines of logs:"
@@ -71,8 +70,8 @@ wait_for_gitlab() {
             return 1
         fi
 
-        # Check for FATAL errors in logs
-        FATAL_ERRORS=$(docker logs gitlab 2>&1 | grep -E "FATAL|UnknownConfigOptionError|There was an error running gitlab-ctl" | tail -5)
+        # Check for FATAL errors in logs (immediate failure)
+        FATAL_ERRORS=$(docker logs gitlab 2>&1 | grep -E "FATAL|UnknownConfigOptionError|There was an error running gitlab-ctl|Configuration error" | tail -5)
         if [[ -n "$FATAL_ERRORS" ]]; then
             echo ""
             log_error "GitLab configuration failed with errors:"
@@ -83,11 +82,34 @@ wait_for_gitlab() {
             return 1
         fi
 
-        # Check health from inside container
-        HEALTH_STATUS=$(docker exec gitlab curl -s http://localhost/-/health 2>/dev/null || echo "")
-        if [[ "$HEALTH_STATUS" == "GitLab OK" ]]; then
+        # Check if GitLab services are running
+        SERVICES_STATUS=$(docker exec gitlab gitlab-ctl status 2>/dev/null || echo "")
+        PUMA_RUNNING=$(echo "$SERVICES_STATUS" | grep -c "run: puma" || echo "0")
+        NGINX_RUNNING=$(echo "$SERVICES_STATUS" | grep -c "run: nginx" || echo "0")
+
+        if [[ "$PUMA_RUNNING" -gt 0 ]] && [[ "$NGINX_RUNNING" -gt 0 ]]; then
+            # Services are running, try health check via multiple methods
+            # Method 1: Direct port 80 health check
+            HEALTH_STATUS=$(docker exec gitlab curl -sf http://127.0.0.1:80/-/health 2>/dev/null || echo "")
+
+            # Method 2: Try via localhost if port 80 fails
+            if [[ -z "$HEALTH_STATUS" ]]; then
+                HEALTH_STATUS=$(docker exec gitlab curl -sf http://localhost/-/health 2>/dev/null || echo "")
+            fi
+
+            # Method 3: Check if web UI is responding (returns HTML)
+            if [[ -z "$HEALTH_STATUS" ]]; then
+                WEB_RESPONSE=$(docker exec gitlab curl -sf http://127.0.0.1:80/ 2>/dev/null | head -1 || echo "")
+                if [[ "$WEB_RESPONSE" == *"html"* ]] || [[ "$WEB_RESPONSE" == *"DOCTYPE"* ]] || [[ "$WEB_RESPONSE" == *"redirect"* ]]; then
+                    HEALTH_STATUS="Web UI responding"
+                fi
+            fi
+        fi
+
+        # Check if GitLab is ready (accept multiple positive responses)
+        if [[ "$HEALTH_STATUS" == "GitLab OK" ]] || [[ "$HEALTH_STATUS" == "Web UI responding" ]] || [[ -n "$HEALTH_STATUS" && "$HEALTH_STATUS" != *"error"* && "$HEALTH_STATUS" != *"Error"* ]]; then
             echo ""
-            log_success "GitLab is ready!"
+            log_success "GitLab is ready! (${HEALTH_STATUS})"
 
             # Reset root password via Rails console (works even if initial password was rejected)
             log_info "Configuring root user..."
@@ -107,15 +129,17 @@ end
 puts 'OK'
             " >/dev/null 2>&1
 
-            log_info "Access: http://localhost:8090 (root / Admin123!@#)"
+            log_success "Access: http://localhost:8090 (root / Kx9mPqR2wZ)"
             return 0
         fi
 
-        # Show recent log activity (last 3 lines, non-repetitive)
-        RECENT_LOGS=$(docker logs gitlab 2>&1 | tail -3 | head -1)
-        if [[ -n "$RECENT_LOGS" ]] && [[ $((attempt % 3)) -eq 0 ]]; then
-            echo "[${attempt}s] $RECENT_LOGS" | head -c 120
-            echo ""
+        # Show progress every 15 seconds
+        if [[ $((attempt % 3)) -eq 0 ]]; then
+            if [[ "$PUMA_RUNNING" -gt 0 ]] && [[ "$NGINX_RUNNING" -gt 0 ]]; then
+                echo "[$(($attempt * 5))s] Services running, waiting for health endpoint..."
+            else
+                echo "[$(($attempt * 5))s] Waiting for services to start..."
+            fi
         fi
 
         sleep 5
@@ -124,8 +148,24 @@ puts 'OK'
 
     echo ""
     log_error "GitLab failed to start within 5 minutes"
-    log_info "Last 50 lines of logs:"
-    docker logs gitlab 2>&1 | tail -50
+
+    # Show diagnostic info
+    log_info "=== DIAGNOSTICS ==="
+    echo ""
+    log_info "Container status:"
+    docker ps -a | grep gitlab || echo "  No container found"
+    echo ""
+    log_info "Service status:"
+    docker exec gitlab gitlab-ctl status 2>/dev/null || echo "  Cannot get service status"
+    echo ""
+    log_info "Port bindings:"
+    docker port gitlab 2>/dev/null || echo "  No ports"
+    echo ""
+    log_info "Last 30 lines of logs:"
+    docker logs gitlab 2>&1 | tail -30
+    echo ""
+    log_info "=== END DIAGNOSTICS ==="
+
     return 1
 }
 
@@ -183,6 +223,29 @@ deploy_gitlab() {
     # Run GitLab CE with minimal configuration for interview demo
     # Only enable essential services: nginx, workhorse, puma, sidekiq, postgres, redis, gitaly, sshd
     # Disable all enterprise/monitoring features to reduce resource usage
+
+    # Build GITLAB_OMNIBUS_CONFIG as a single-line string (avoids shell parsing issues)
+    GITLAB_CONFIG="external_url 'http://localhost:8090'; "
+    GITLAB_CONFIG+="nginx['listen_port'] = 80; "
+    GITLAB_CONFIG+="nginx['listen_https'] = false; "
+    GITLAB_CONFIG+="gitlab_rails['gitlab_shell_ssh_port'] = 8022; "
+    GITLAB_CONFIG+="gitlab_rails['gitlab_shell_ssh_host'] = 'localhost'; "
+    # Performance tuning
+    GITLAB_CONFIG+="puma['worker_processes'] = 2; "
+    GITLAB_CONFIG+="puma['min_threads'] = 1; "
+    GITLAB_CONFIG+="puma['max_threads'] = 2; "
+    GITLAB_CONFIG+="puma['per_worker_max_memory_mb'] = 1024; "
+    GITLAB_CONFIG+="sidekiq['max_concurrency'] = 5; "
+    GITLAB_CONFIG+="postgresql['max_connections'] = 50; "
+    GITLAB_CONFIG+="postgresql['shared_buffers'] = '128MB'; "
+    GITLAB_CONFIG+="postgresql['work_mem'] = '8MB'; "
+    # Disable monitoring
+    GITLAB_CONFIG+="prometheus_monitoring['enable'] = false; "
+    # Disable unused features
+    GITLAB_CONFIG+="gitlab_rails['gitlab_email_enabled'] = false; "
+    GITLAB_CONFIG+="gitlab_rails['incoming_email_enabled'] = false; "
+    GITLAB_CONFIG+="gitlab_rails['usage_ping_enabled'] = false;"
+
     if ! docker run -d \
         --name gitlab \
         --restart unless-stopped \
@@ -190,31 +253,7 @@ deploy_gitlab() {
         --privileged \
         -p 0.0.0.0:8090:80 \
         -p 0.0.0.0:8022:22 \
-        -e GITLAB_OMNIBUS_CONFIG="
-external_url 'http://localhost:8090';
-gitlab_rails['gitlab_shell_ssh_port'] = 8022;
-gitlab_rails['gitlab_shell_ssh_host'] = 'localhost';
-
-# Performance tuning for interview scenarios (reduce resource usage)
-puma['worker_processes'] = 2;
-puma['min_threads'] = 1;
-puma['max_threads'] = 2;
-puma['per_worker_max_memory_mb'] = 1024;
-
-sidekiq['max_concurrency'] = 5;
-
-postgresql['max_connections'] = 50;
-postgresql['shared_buffers'] = '128MB';
-postgresql['work_mem'] = '8MB';
-
-# Disable monitoring
-prometheus_monitoring['enable'] = false;
-
-# Disable features not needed for Git operations
-gitlab_rails['gitlab_email_enabled'] = false;
-gitlab_rails['incoming_email_enabled'] = false;
-gitlab_rails['usage_ping_enabled'] = false;
-" \
+        -e GITLAB_OMNIBUS_CONFIG="$GITLAB_CONFIG" \
         -e GITLAB_ROOT_PASSWORD="Kx9mPqR2wZ" \
         -v gitlab_config:/etc/gitlab \
         -v gitlab_logs:/var/log/gitlab \

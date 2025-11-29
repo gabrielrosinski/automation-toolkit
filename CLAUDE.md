@@ -235,18 +235,27 @@ All deployment files are generated from templates in `templates/` directory usin
 
 ### Docker Environment Switching
 The infrastructure setup follows this critical sequence:
-1. **Start minikube** - Starts Kubernetes cluster first
+1. **Start minikube** - Starts Kubernetes cluster first (creates `minikube` Docker network)
 2. **Deploy GitLab in host Docker** - `deploy-gitlab.sh` runs in host Docker context
 3. **Deploy Jenkins in host Docker** - `deploy-jenkins.sh` runs in host Docker context
-4. **Create network bridge** - Connects GitLab and Jenkins via custom bridge network
-5. **Switch to minikube Docker** - After validation, runs `eval $(minikube docker-env)`
-6. **App builds use minikube** - All subsequent `docker build` commands create images in minikube's registry
-7. **Jenkins accesses both** - Jenkins container stays in host Docker but can build to minikube via mounted socket
+4. **Create GitLab-Jenkins network bridge** - Connects GitLab and Jenkins via `gitlab-jenkins-network`
+5. **Connect Jenkins to minikube network** - Jenkins joins `minikube` network for Docker access
+6. **Copy minikube TLS certs to Jenkins** - Certs copied to `/var/jenkins_home/.minikube-docker/`
+7. **Create minikube Docker env file** - `/var/jenkins_home/minikube-docker-env.sh` with minikube's internal IP
+8. **Switch shell to minikube Docker** - After validation, runs `eval $(minikube docker-env)` for CLI
+
+**Jenkins Network Architecture:**
+- Jenkins is connected to TWO Docker networks:
+  - `gitlab-jenkins-network` - For GitLab connectivity (`http://gitlab:80`)
+  - `minikube` - For Docker build access (`tcp://192.168.49.2:2376`)
+- Jenkins uses TLS certs to securely connect to minikube's Docker daemon
+- Jenkinsfile sources `/var/jenkins_home/minikube-docker-env.sh` to build images
 
 This architecture ensures:
 - GitLab and Jenkins containers persist across minikube restarts
 - Faster startup (no K8s overhead for CI/CD infrastructure)
 - Container-to-container communication via DNS (gitlab-jenkins-network)
+- Jenkins can build images directly in minikube's Docker daemon
 - Images built by Jenkins are immediately available to K8s pods
 - No need to push images to external registry
 
