@@ -33,11 +33,17 @@ See **[WORKFLOWS.md](WORKFLOWS.md)** for complete testing flow.
 ```bash
 ./1-infra-setup.sh                    # While listening to requirements (20-25 min)
 # → Installs Docker, kubectl, minikube, GitLab CE, Jenkins
-# → GitLab: http://localhost:8090 (root / interview2024)
+# → GitLab: http://localhost:8090 (root / Kx9mPqR2wZ)
 # → Jenkins: http://localhost:8080 (admin / admin)
 
+# get existing ssh key
+# cat ~/.ssh/id_ed25519.pub
+
+# clear out stale gitlab ssh host key
+# ssh-keygen -f '/home/blaqs/.ssh/known_hosts' -R '[localhost]:8022'
+
 # Option A: Use local GitLab (30 seconds setup)
-# Open http://localhost:8090, login as root/interview2024, create project
+# Open http://localhost:8090, login as root/Kx9mPqR2wZ, create project
 
 # Option B: Clone from external GitLab
 git clone <their-gitlab-url>          # Clone their buggy code
@@ -45,7 +51,7 @@ cd <project>
 
 ../2-generate-project.sh              # ONE SCRIPT: Generate files + Deploy + Jenkins setup (3-5 min)
 # → Auto-detects local GitLab at localhost:8090
-# → Prompts for GitLab credentials (defaults: root/interview2024)
+# → Prompts for GitLab credentials (defaults: root/Kx9mPqR2wZ)
 # → Generates Dockerfile, Jenkinsfile, K8s manifests
 # → Optionally deploys to K8s
 # → Optionally creates Jenkins pipeline job
@@ -55,6 +61,27 @@ cd <project>
 **Total automation time: ~25-30 minutes** (down from 55+ minutes!)
 
 See **[WORKFLOWS.md](WORKFLOWS.md)** for complete interview flow.
+
+---
+
+## Access URLs & Credentials
+
+| Service | URL | Username | Password |
+|---------|-----|----------|----------|
+| **GitLab CE** | http://localhost:8090 | `root` | `Kx9mPqR2wZ` |
+| **Jenkins** | http://localhost:8080 | `admin` | `admin` |
+| **PHP App (K8s)** | `minikube service <app-name> --url` | - | - |
+
+**GitLab SSH:** `ssh://git@localhost:8022/root/<project>.git`
+
+**GitLab HTTP Clone:** `http://localhost:8090/root/<project>.git`
+
+**Note:** For K8s deployed apps, get the URL with:
+```bash
+minikube service <app-name> -n <namespace> --url
+# Or use NodePort: http://<minikube-ip>:<nodeport>
+kubectl get svc -n <namespace>
+```
 
 ---
 
@@ -110,7 +137,7 @@ lab-toolkit/
   - Container name: `gitlab`
   - Web UI: http://localhost:8090
   - SSH: port 8022
-  - Pre-configured root account (root/root)
+  - Pre-configured root account (root / Kx9mPqR2wZ)
   - Minimal configuration: Monitoring/registry/pages/KAS disabled
   - Reduced workers: Puma=2, Sidekiq=10 (faster, lower RAM usage)
   - 3 persistent volumes (config, logs, data)
@@ -139,7 +166,7 @@ lab-toolkit/
 
 ### Self-Hosted GitLab CE - Minimal Mode for Interviews
 - **Fully automated deployment** - No manual configuration needed
-- **Pre-configured credentials** - root/root
+- **Pre-configured credentials** - root / Kx9mPqR2wZ
 - **Minimal configuration** - Monitoring/registry/pages/KAS disabled for faster performance
 - **Optimized for interviews** - Reduced workers (Puma=2, Sidekiq=10), lower RAM usage (~4-6GB vs 10-12GB)
 - **Custom Docker network** - Seamless GitLab ↔ Jenkins communication
