@@ -104,8 +104,8 @@ kubectl port-forward service/<service-name> 8080:80
 MINIKUBE SPECIFIC
 -----------------
 minikube start                          # Start cluster
-minikube stop                           # Stop cluster
-minikube delete                         # Delete cluster
+minikube stop                           # Stop cluster (preserves data)
+minikube delete --all --purge           # Delete cluster (complete removal)
 minikube dashboard                      # Open K8s dashboard
 minikube service list                   # List all services
 minikube service <name> --url           # Get service URL

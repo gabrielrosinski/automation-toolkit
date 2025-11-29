@@ -54,12 +54,13 @@ else
     echo ""
     log_info "Removing:"
     echo "  • Jenkins & GitLab containers + volumes (fresh start)"
-    echo "  • minikube cluster"
+    echo "  • Kubernetes resources (pods, services, deployments)"
     echo "  • Toolkit-built Docker images"
     echo "  • Generated files"
     echo ""
     log_info "Preserving:"
     echo "  • Installed software (Docker, kubectl, minikube, PHP, Git)"
+    echo "  • minikube cluster (stopped, faster restart)"
     echo "  • Custom network (gitlab-jenkins-network) - faster re-setup"
     echo "  • Base images (gitlab/gitlab-ce, jenkins/jenkins, php:*) - faster re-setup"
     echo ""
@@ -206,41 +207,60 @@ else
     log_info "Keeping base images (gitlab/gitlab-ce, jenkins/jenkins, php:*)"
 fi
 
-# 6. Delete minikube cluster and configuration
+# 6. Clean up minikube (stop in default mode, delete in full mode)
 echo ""
 log_info "Cleaning up minikube..."
 if command -v minikube >/dev/null 2>&1; then
-    # Delete cluster
-    if minikube status >/dev/null 2>&1; then
-        log_info "Deleting minikube cluster..."
-        minikube delete
-        log_success "minikube cluster deleted"
+    if [[ "$FULL_CLEANUP" == "true" ]]; then
+        # FULL MODE: Complete deletion with purge
+        if minikube status >/dev/null 2>&1; then
+            log_info "Deleting minikube cluster (with purge)..."
+            minikube delete --all --purge 2>/dev/null || true
+            log_success "minikube cluster deleted"
+        else
+            # Try delete anyway in case profile exists but container is missing
+            log_info "Attempting minikube cleanup..."
+            minikube delete --all --purge 2>/dev/null || true
+        fi
+
+        # Clean up minikube configuration
+        echo ""
+        log_info "Cleaning minikube configuration..."
+        if [ -d ~/.minikube ]; then
+            MINIKUBE_SIZE=$(du -sh ~/.minikube 2>/dev/null | cut -f1)
+            log_info "Removing ~/.minikube directory (${MINIKUBE_SIZE})..."
+            rm -rf ~/.minikube
+            log_success "minikube config removed"
+        fi
+
+        if [ -f ~/.kube/config ]; then
+            log_info "Backing up and cleaning kubectl config..."
+            # Backup current kubeconfig
+            cp ~/.kube/config ~/.kube/config.backup.$(date +%Y%m%d_%H%M%S)
+
+            # Remove minikube context and cluster
+            kubectl config delete-context minikube 2>/dev/null || true
+            kubectl config delete-cluster minikube 2>/dev/null || true
+            kubectl config delete-user minikube 2>/dev/null || true
+
+            log_success "minikube context removed from kubectl config"
+            log_info "Backup saved to ~/.kube/config.backup.*"
+        fi
     else
-        log_info "No minikube cluster running"
-    fi
+        # DEFAULT MODE: Stop minikube (faster restart)
+        if minikube status >/dev/null 2>&1; then
+            log_info "Stopping minikube cluster (preserving for fast restart)..."
+            minikube stop 2>/dev/null || true
+            log_success "minikube cluster stopped (use 'minikube start' to restart)"
+        else
+            log_info "minikube cluster not running"
+        fi
 
-    # Clean up minikube configuration
-    echo ""
-    log_info "Cleaning minikube configuration..."
-    if [ -d ~/.minikube ]; then
-        MINIKUBE_SIZE=$(du -sh ~/.minikube 2>/dev/null | cut -f1)
-        log_info "Removing ~/.minikube directory (${MINIKUBE_SIZE})..."
-        rm -rf ~/.minikube
-        log_success "minikube config removed"
-    fi
-
-    if [ -f ~/.kube/config ]; then
-        log_info "Backing up and cleaning kubectl config..."
-        # Backup current kubeconfig
-        cp ~/.kube/config ~/.kube/config.backup.$(date +%Y%m%d_%H%M%S)
-
-        # Remove minikube context and cluster
-        kubectl config delete-context minikube 2>/dev/null || true
-        kubectl config delete-cluster minikube 2>/dev/null || true
-        kubectl config delete-user minikube 2>/dev/null || true
-
-        log_success "minikube context removed from kubectl config"
-        log_info "Backup saved to ~/.kube/config.backup.*"
+        # Delete all Kubernetes resources to ensure clean state
+        log_info "Cleaning Kubernetes resources..."
+        kubectl delete all --all --all-namespaces 2>/dev/null || true
+        kubectl delete pvc --all --all-namespaces 2>/dev/null || true
+        log_success "Kubernetes resources cleaned"
     fi
 else
     log_info "minikube not installed (skipping)"
@@ -316,12 +336,13 @@ if [[ "$FULL_CLEANUP" == "true" ]]; then
 else
     log_info "DEFAULT CLEANUP - What was removed:"
     echo "  ✓ Jenkins & GitLab containers + volumes (fresh start)"
-    echo "  ✓ minikube cluster"
+    echo "  ✓ Kubernetes resources (pods, services, deployments)"
     echo "  ✓ Toolkit-built Docker images"
     echo "  ✓ Generated files"
     echo ""
     log_info "What was preserved:"
     echo "  ✓ Installed software (Docker, kubectl, minikube, PHP, Git)"
+    echo "  ✓ minikube cluster (stopped, use 'minikube start' to restart)"
     echo "  ✓ Custom network (gitlab-jenkins-network) - re-used on next setup"
     echo "  ✓ Base images (gitlab/gitlab-ce, jenkins/jenkins, php:*) - faster re-setup"
     echo ""

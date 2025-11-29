@@ -516,11 +516,12 @@ start_minikube() {
         if ! minikube start --driver=docker --memory=4096 --cpus=2 --container-runtime=docker; then
             log_error "minikube start failed"
             log_warning "Attempting recovery: deleting and recreating cluster..."
-            minikube delete
+            minikube delete --all --purge 2>/dev/null || true
+            rm -rf ~/.minikube 2>/dev/null || true
             sleep 3
 
-            # Retry with force flag
-            if ! minikube start --driver=docker --memory=4096 --cpus=2 --container-runtime=docker --force; then
+            # Retry with clean state
+            if ! minikube start --driver=docker --memory=4096 --cpus=2 --container-runtime=docker; then
                 log_error "minikube start failed after retry"
                 return 1
             fi
