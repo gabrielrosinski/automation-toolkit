@@ -1,0 +1,65 @@
+# =============================================================================
+# Kubernetes Ingress
+# =============================================================================
+# For routing external traffic to services
+# Requires an Ingress Controller (nginx-ingress, traefik, etc.)
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{APP_NAME}}-ingress
+  namespace: {{K8S_NAMESPACE}}
+  labels:
+    app: {{APP_NAME}}
+  annotations:
+    # Nginx Ingress Controller annotations
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    # nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+    # Traefik annotations (if using Traefik)
+    # traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: nginx              # CUSTOMIZE: nginx, traefik, etc.
+
+  rules:
+    # Host-based routing
+    - host: {{APP_NAME}}.local         # CUSTOMIZE: Your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{APP_NAME}}
+                port:
+                  number: {{APP_PORT}}
+
+    # Without host (catch-all) - useful for interviews
+    # - http:
+    #     paths:
+    #       - path: /
+    #         pathType: Prefix
+    #         backend:
+    #           service:
+    #             name: {{APP_NAME}}
+    #             port:
+    #               number: {{APP_PORT}}
+
+  # TLS configuration (optional)
+  # tls:
+  #   - hosts:
+  #       - {{APP_NAME}}.local
+  #     secretName: {{APP_NAME}}-tls-secret
+
+---
+# =============================================================================
+# For Minikube: Enable ingress addon first
+# =============================================================================
+# minikube addons enable ingress
+#
+# Add to /etc/hosts:
+# $(minikube ip) {{APP_NAME}}.local
+#
+# Or use minikube tunnel for LoadBalancer services

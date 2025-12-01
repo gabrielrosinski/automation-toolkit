@@ -1,0 +1,83 @@
+# =============================================================================
+# Resource Quota
+# =============================================================================
+# Limits total resource consumption in a namespace
+# Prevents one team/app from consuming all cluster resources
+# =============================================================================
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{APP_NAME}}-quota
+  namespace: {{K8S_NAMESPACE}}
+  labels:
+    app: {{APP_NAME}}
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "4"                   # Total CPU requests allowed
+    requests.memory: "4Gi"              # Total memory requests allowed
+    limits.cpu: "8"                     # Total CPU limits allowed
+    limits.memory: "8Gi"                # Total memory limits allowed
+
+    # Object counts
+    pods: "10"                          # Max pods in namespace
+    services: "5"                       # Max services
+    secrets: "10"                       # Max secrets
+    configmaps: "10"                    # Max configmaps
+    persistentvolumeclaims: "5"         # Max PVCs
+
+    # Optional: Limit specific service types
+    # services.nodeports: "2"
+    # services.loadbalancers: "1"
+
+---
+# =============================================================================
+# LimitRange (Optional - Default limits for pods)
+# =============================================================================
+# Sets default resource requests/limits for pods that don't specify them
+# =============================================================================
+
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{APP_NAME}}-limits
+  namespace: {{K8S_NAMESPACE}}
+spec:
+  limits:
+    # Default limits for containers
+    - type: Container
+      default:                          # Default limits (if not specified)
+        cpu: "500m"
+        memory: "256Mi"
+      defaultRequest:                   # Default requests (if not specified)
+        cpu: "100m"
+        memory: "128Mi"
+      max:                              # Maximum allowed
+        cpu: "2"
+        memory: "1Gi"
+      min:                              # Minimum allowed
+        cpu: "50m"
+        memory: "64Mi"
+
+    # Limits for pods (sum of all containers)
+    - type: Pod
+      max:
+        cpu: "4"
+        memory: "2Gi"
+
+---
+# =============================================================================
+# Notes:
+# =============================================================================
+# - ResourceQuota requires pods to specify resource requests/limits
+# - LimitRange provides defaults so pods without limits still work
+# - Use both together for best control
+#
+# Check quota usage:
+#   kubectl get resourcequota -n {{K8S_NAMESPACE}}
+#   kubectl describe resourcequota {{APP_NAME}}-quota -n {{K8S_NAMESPACE}}
+#
+# Check limit ranges:
+#   kubectl get limitrange -n {{K8S_NAMESPACE}}
+#   kubectl describe limitrange {{APP_NAME}}-limits -n {{K8S_NAMESPACE}}

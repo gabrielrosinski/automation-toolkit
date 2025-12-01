@@ -249,6 +249,18 @@ done
 read -p "Git branch name [main]: " GIT_BRANCH
 GIT_BRANCH=${GIT_BRANCH:-main}
 
+# Prompt for advanced K8s config
+echo ""
+echo "Advanced K8s manifests (optional):"
+echo "  - ConfigMap: Environment configuration (APP_ENV, LOG_LEVEL, etc.)"
+echo "  - Secret: Sensitive data (DATABASE_PASSWORD, API_KEY)"
+echo "  - HPA: Horizontal Pod Autoscaler (auto-scaling based on CPU/memory)"
+echo "  - Ingress: External traffic routing (requires ingress controller)"
+echo "  - PDB: Pod Disruption Budget (HA during maintenance)"
+echo "  - ResourceQuota: Namespace resource limits"
+read -p "Include advanced K8s manifests? [y/N]: " INCLUDE_ADVANCED_K8S
+INCLUDE_ADVANCED_K8S=${INCLUDE_ADVANCED_K8S:-N}
+
 # Docker image name (no registry prefix - we build directly in minikube's Docker)
 # When using 'minikube docker-env', images are available to K8s without pushing to a registry
 IMAGE_NAME="${APP_NAME}"
@@ -262,6 +274,11 @@ echo "  App Port: $APP_PORT"
 echo "  App Name: $APP_NAME"
 echo "  K8s Namespace: $K8S_NAMESPACE"
 echo "  Docker Image: $IMAGE_NAME (built in minikube Docker)"
+if [[ "$INCLUDE_ADVANCED_K8S" =~ ^[Yy]$ ]]; then
+    echo "  Advanced K8s: Yes (ConfigMap, Secret, HPA, Ingress, PDB, ResourceQuota)"
+else
+    echo "  Advanced K8s: No (only Deployment, Service, Namespace)"
+fi
 echo ""
 
 read -p "Proceed with generation? [Y/n]: " CONFIRM
@@ -365,6 +382,16 @@ if [[ "$K8S_NAMESPACE" != "default" ]]; then
     process_template "$TEMPLATES_DIR/kubernetes/namespace.yaml" "k8s/namespace.yaml" "Kubernetes namespace"
 fi
 
+# Generate advanced K8s manifests (if requested)
+if [[ "$INCLUDE_ADVANCED_K8S" =~ ^[Yy]$ ]]; then
+    log_info "Generating advanced K8s manifests..."
+    process_template "$TEMPLATES_DIR/kubernetes/configmap.yaml" "k8s/configmap.yaml" "Kubernetes ConfigMap"
+    process_template "$TEMPLATES_DIR/kubernetes/hpa.yaml" "k8s/hpa.yaml" "Kubernetes HPA"
+    process_template "$TEMPLATES_DIR/kubernetes/ingress.yaml" "k8s/ingress.yaml" "Kubernetes Ingress"
+    process_template "$TEMPLATES_DIR/kubernetes/pdb.yaml" "k8s/pdb.yaml" "Kubernetes PDB"
+    process_template "$TEMPLATES_DIR/kubernetes/resourcequota.yaml" "k8s/resourcequota.yaml" "Kubernetes ResourceQuota"
+fi
+
 # Generate .dockerignore
 process_template "$TEMPLATES_DIR/docker/.dockerignore" ".dockerignore" ".dockerignore"
 
@@ -408,6 +435,14 @@ echo "  ✓ k8s/deployment.yaml"
 echo "  ✓ k8s/service.yaml"
 if [[ "$K8S_NAMESPACE" != "default" ]]; then
     echo "  ✓ k8s/namespace.yaml"
+fi
+if [[ "$INCLUDE_ADVANCED_K8S" =~ ^[Yy]$ ]]; then
+    echo "  ✓ k8s/configmap.yaml"
+    echo "  ✓ k8s/secret.yaml"
+    echo "  ✓ k8s/hpa.yaml"
+    echo "  ✓ k8s/ingress.yaml"
+    echo "  ✓ k8s/pdb.yaml"
+    echo "  ✓ k8s/resourcequota.yaml"
 fi
 echo "  ✓ .dockerignore"
 echo "  ✓ quick-deploy.sh"

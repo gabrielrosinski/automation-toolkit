@@ -1,0 +1,44 @@
+# =============================================================================
+# Pod Disruption Budget (PDB)
+# =============================================================================
+# Ensures minimum availability during voluntary disruptions:
+#   - Node maintenance/drain
+#   - Cluster upgrades
+#   - Autoscaler scale-down
+# =============================================================================
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{APP_NAME}}-pdb
+  namespace: {{K8S_NAMESPACE}}
+  labels:
+    app: {{APP_NAME}}
+spec:
+  # Option 1: Minimum available pods (recommended)
+  minAvailable: 1                       # At least 1 pod must stay running
+
+  # Option 2: Maximum unavailable pods (alternative)
+  # maxUnavailable: 1                   # At most 1 pod can be down
+
+  # Option 3: Percentage-based
+  # minAvailable: "50%"                 # At least 50% must stay running
+  # maxUnavailable: "25%"               # At most 25% can be down
+
+  selector:
+    matchLabels:
+      app: {{APP_NAME}}
+
+---
+# =============================================================================
+# Notes:
+# =============================================================================
+# - PDB only affects VOLUNTARY disruptions (kubectl drain, cluster upgrades)
+# - Does NOT protect against involuntary disruptions (node crash, OOM kill)
+# - If minAvailable >= replicas, drain operations will be blocked
+# - For 2 replicas: use minAvailable: 1 (allows 1 pod disruption)
+# - For 3 replicas: use minAvailable: 2 or maxUnavailable: 1
+#
+# Check PDB status:
+#   kubectl get pdb -n {{K8S_NAMESPACE}}
+#   kubectl describe pdb {{APP_NAME}}-pdb -n {{K8S_NAMESPACE}}

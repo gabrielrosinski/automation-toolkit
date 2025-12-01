@@ -1,0 +1,52 @@
+# =============================================================================
+# Kubernetes ConfigMap
+# =============================================================================
+# For non-sensitive configuration data
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{APP_NAME}}-config
+  namespace: {{K8S_NAMESPACE}}
+  labels:
+    app: {{APP_NAME}}
+data:
+  # Key-value pairs - CUSTOMIZE these for your application
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  # DATABASE_HOST: "mysql-service"
+  # DATABASE_PORT: "3306"
+  # DATABASE_NAME: "{{APP_NAME}}"
+
+  # Multi-line config file example
+  # app.conf: |
+  #   server {
+  #     listen 80;
+  #     server_name localhost;
+  #   }
+
+---
+# Usage in Deployment:
+#
+# Option 1: Single env var from ConfigMap
+# env:
+#   - name: DATABASE_HOST
+#     valueFrom:
+#       configMapKeyRef:
+#         name: {{APP_NAME}}-config
+#         key: DATABASE_HOST
+#
+# Option 2: All keys as env vars
+# envFrom:
+#   - configMapRef:
+#       name: {{APP_NAME}}-config
+#
+# Option 3: Mount as file
+# volumes:
+#   - name: config-volume
+#     configMap:
+#       name: {{APP_NAME}}-config
+# volumeMounts:
+#   - name: config-volume
+#     mountPath: /etc/config
