@@ -469,6 +469,11 @@ check_minikube_health() {
                 log_info "Deleting corrupted minikube installation..."
                 minikube delete --all --purge
                 rm -rf ~/.minikube ~/.kube/config 2>/dev/null || true
+
+                # Clean up stale Docker resources (fixes "IP address already in use" errors)
+                docker rm -f minikube 2>/dev/null || true
+                docker network rm minikube 2>/dev/null || true
+
                 log_success "Corrupted installation cleaned up"
                 return 0
             else
@@ -516,8 +521,24 @@ start_minikube() {
         if ! minikube start --driver=docker --memory=4096 --cpus=2 --container-runtime=docker; then
             log_error "minikube start failed"
             log_warning "Attempting recovery: deleting and recreating cluster..."
+
+            # Full cleanup including Docker-level resources
+            # This fixes "IP address already in use" errors from stale containers/networks
             minikube delete --all --purge 2>/dev/null || true
             rm -rf ~/.minikube 2>/dev/null || true
+
+            # Clean up stale Docker container (may exist even after minikube delete)
+            if docker ps -a --format '{{.Names}}' | grep -q "^minikube$"; then
+                log_info "Removing stale minikube Docker container..."
+                docker rm -f minikube 2>/dev/null || true
+            fi
+
+            # Clean up stale Docker network (holds IP allocation)
+            if docker network ls --format '{{.Name}}' | grep -q "^minikube$"; then
+                log_info "Removing stale minikube Docker network..."
+                docker network rm minikube 2>/dev/null || true
+            fi
+
             sleep 3
 
             # Retry with clean state
@@ -841,7 +862,7 @@ ENVEOF"
 
     echo "Next steps:"
     if [[ "$GITLAB_DEPLOYED" == "true" ]]; then
-        echo "1. Access GitLab at http://localhost:8090 (root / interview2024)"
+        echo "1. Access GitLab at http://localhost:8090 (root / Kx9mPqR2wZ)"
         echo "2. Create a new project in GitLab (see WORKFLOWS.md)"
         echo "3. Access Jenkins at http://localhost:8080 (admin / admin)"
         echo "4. Clone or initialize your Git repository"

@@ -223,6 +223,16 @@ if command -v minikube >/dev/null 2>&1; then
             minikube delete --all --purge 2>/dev/null || true
         fi
 
+        # Clean up stale Docker resources (fixes "IP address already in use" on next start)
+        if docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^minikube$"; then
+            log_info "Removing stale minikube Docker container..."
+            docker rm -f minikube 2>/dev/null || true
+        fi
+        if docker network ls --format '{{.Name}}' 2>/dev/null | grep -q "^minikube$"; then
+            log_info "Removing stale minikube Docker network..."
+            docker network rm minikube 2>/dev/null || true
+        fi
+
         # Clean up minikube configuration
         echo ""
         log_info "Cleaning minikube configuration..."
